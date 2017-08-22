@@ -24,8 +24,7 @@ use secp::pedersen::Commitment;
 
 pub use graph;
 
-use core::core::transaction;
-use core::core::hash;
+use core::core::{block, hash, transaction};
 
 /// Placeholder: the data representing where we heard about a tx from.
 ///
@@ -46,7 +45,7 @@ pub struct TxSource {
 #[derive(Clone)]
 pub enum Parent {
     Unknown,
-    BlockTransaction,
+    BlockTransaction{header: block::BlockHeader, output: transaction::Output},
     PoolTransaction{tx_ref: hash::Hash},
     AlreadySpent{other_tx: hash::Hash},
 }
@@ -55,7 +54,7 @@ impl fmt::Debug for Parent {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             &Parent::Unknown => write!(f, "Parent: Unknown"),
-            &Parent::BlockTransaction => write!(f, "Parent: Block Transaction"),
+            &Parent::BlockTransaction{header: _, output: _} => write!(f, "Parent: Block Transaction"),
             &Parent::PoolTransaction{tx_ref: x} => write!(f,
                 "Parent: Pool Transaction ({:?})", x),
             &Parent::AlreadySpent{other_tx: x} => write!(f,
@@ -88,6 +87,13 @@ pub enum PoolError {
         /// The spent output
         spent_output: Commitment
     },
+    /// Attempt to spend a coinbase output before it matures (1000 blocks?)
+    ImmatureCoinbase{
+        /// The block header of the block containing the coinbase output
+        header: block::BlockHeader,
+        /// The unspent coinbase output
+        output: Commitment,
+    },
     /// An orphan successfully added to the orphans set
     OrphanTransaction,
 }
@@ -99,6 +105,9 @@ pub trait BlockChain {
   /// a result with its current view of the most worked chain, ignoring
   /// orphans, etc.
   fn get_unspent(&self, output_ref: &Commitment) -> Option<transaction::Output>;
+
+  /// Get the block header for an output by its commitment.
+  fn get_block_header_for_output(&self, output_ref: &Commitment) -> Option<block::BlockHeader>;
 }
 
 /// Pool contains the elements of the graph that are connected, in full, to

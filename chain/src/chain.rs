@@ -210,6 +210,29 @@ impl Chain {
 		}
 	}
 
+    /// Get the block header for the output from its commitment.
+    /// TODO - can we combine this with get_unspent below (maybe return a tuple)?
+    pub fn get_block_header_for_output(&self, output_ref: &Commitment) -> Option<BlockHeader> {
+        if let Ok(out) = self.store.get_output_by_commit(output_ref) {
+            let head = none_err!(self.store.head());
+            let mut block_h = head.last_block_h;
+            loop {
+                let b = none_err!(self.store.get_block(&block_h));
+                for output in b.outputs {
+                    if output.commitment() == *output_ref {
+                        return Some(b.header);
+                    }
+                }
+                if b.header.height == 1 {
+                    return None;
+                } else {
+                    block_h = b.header.previous;
+                }
+            }
+        }
+        None
+    }
+
 	/// Gets an unspent output from its commitment. With return None if the
 	/// output
 	/// doesn't exist or has been spent. This querying is done in a way that's

@@ -93,6 +93,11 @@ impl BlockChain for DummyChainImpl {
     fn get_unspent(&self, commitment: &Commitment) -> Option<transaction::Output> {
         self.utxo.read().unwrap().get_output(commitment).cloned()
     }
+
+    fn get_block_header_for_output(&self, _commitment: &Commitment) -> Option<block::BlockHeader> {
+        // TODO - this is clearly not the right block header
+        Some(block::BlockHeader::default())
+    }
 }
 
 impl DummyChain for DummyChainImpl {
