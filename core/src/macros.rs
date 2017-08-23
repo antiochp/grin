@@ -91,8 +91,8 @@ macro_rules! ser_multiread {
 /// Eliminate some of the boilerplate of serialization (package ser) by
 /// passing directly pairs of writer function and data to write.
 /// Example before:
-///   try!(reader.write_u64(42));
-///   try!(reader.write_u32(100));
+///   try!(writer.write_u64(42));
+///   try!(writer.write_u32(100));
 /// Example after:
 ///   ser_multiwrite!(writer, [write_u64, 42], [write_u32, 100]);
 #[macro_export]

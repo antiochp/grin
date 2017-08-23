@@ -103,8 +103,8 @@ impl ChainStore for ChainKVStore {
 			)?;
 
 		// saving the full output under its hash, as well as a commitment to hash index
-		for out in &b.outputs {
-			let mut out_bytes = out.commit.as_ref().to_vec();
+		for (commit, out) in &b.outputs {
+			let mut out_bytes = commit.as_ref().to_vec();
 			batch = batch.put_ser(
 				&to_key(OUTPUT_COMMIT_PREFIX, &mut out_bytes)[..],
 				out,

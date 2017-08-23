@@ -214,7 +214,7 @@ impl DirectedGraph {
 /// proofs and any extra data the kernel may cover, but it is used initially
 /// for testing purposes.
 pub fn transaction_identifier(tx: &core::transaction::Transaction) -> core::hash::Hash {
-    core::transaction::merkle_inputs_outputs(&tx.inputs, &tx.outputs)
+    core::transaction::merkle_inputs_outputs(tx.inputs.to_vec(), tx.outputs.to_vec())
 }
 
 #[cfg(test)]

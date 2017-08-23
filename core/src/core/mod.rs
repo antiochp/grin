@@ -46,7 +46,7 @@ pub trait Committed {
 	fn sum_commitments(&self, secp: &Secp256k1) -> Result<Commitment, secp::Error> {
 		// first, verify each range proof
 		let ref outputs = self.outputs_committed();
-		for output in *outputs {
+		for output in outputs {
 			try!(output.verify_proof(secp))
 		}
 
@@ -71,10 +71,10 @@ pub trait Committed {
 	}
 
 	/// Vector of committed inputs to verify
-	fn inputs_committed(&self) -> &Vec<Input>;
+	fn inputs_committed(&self) -> Vec<Input>;
 
 	/// Vector of committed inputs to verify
-	fn outputs_committed(&self) -> &Vec<Output>;
+	fn outputs_committed(&self) -> Vec<Output>;
 
 	/// The overage amount expected over the commitments. Can be negative (a
 	/// fee) or positive (a reward).
@@ -85,7 +85,7 @@ pub trait Committed {
 pub struct Proof {
     /// The nonces
 	pub nonces:Vec<u32>,
-    
+
     /// The proof size
     pub proof_size: usize,
 }

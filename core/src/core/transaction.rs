@@ -142,11 +142,11 @@ impl Readable for Transaction {
 
 
 impl Committed for Transaction {
-	fn inputs_committed(&self) -> &Vec<Input> {
-		&self.inputs
+	fn inputs_committed(&self) -> Vec<Input> {
+	    self.inputs.clone()
 	}
-	fn outputs_committed(&self) -> &Vec<Output> {
-		&self.outputs
+	fn outputs_committed(&self) -> Vec<Output> {
+		self.outputs.clone()
 	}
 	fn overage(&self) -> i64 {
 		(self.fee as i64)
@@ -339,9 +339,15 @@ impl Output {
 
 /// Utility function to calculate the Merkle root of vectors of inputs and
 /// outputs.
-pub fn merkle_inputs_outputs(inputs: &Vec<Input>, outputs: &Vec<Output>) -> Hash {
-	let mut all_hs = map_vec!(inputs, |inp| inp.hash());
-	all_hs.append(&mut map_vec!(outputs, |out| out.hash()));
+pub fn merkle_inputs_outputs(inputs: Vec<Input>, outputs: Vec<Output>) -> Hash {
+    // TODO - feel like this is unnecessarily inefficient, lots of cloning and sorting
+    let mut sorted_inputs = inputs.clone();
+    sorted_inputs.sort_by_key(|inp| inp.hash());
+    let mut sorted_outputs = outputs.clone();
+    sorted_outputs.sort_by_key(|out| out.hash());
+
+	let mut all_hs = map_vec!(&sorted_inputs, |inp| inp.hash());
+	all_hs.append(&mut map_vec!(&sorted_outputs, |out| out.hash()));
 	MerkleRow::new(all_hs).root()
 }
 

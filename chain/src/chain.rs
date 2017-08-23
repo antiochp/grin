@@ -226,8 +226,8 @@ impl Chain {
 			let mut block_h = head.last_block_h;
 			loop {
 				let b = none_err!(self.store.get_block(&block_h));
-				for input in b.inputs {
-					if input.commitment() == *output_ref {
+				for (commitment, _) in b.inputs {
+					if commitment == *output_ref {
 						return None;
 					}
 				}

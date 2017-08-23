@@ -372,13 +372,13 @@ impl<T> TransactionPool<T> where T: BlockChain {
         let mut marked_transactions: HashMap<hash::Hash, ()> = HashMap::new();
         {
             let mut conflicting_txs: Vec<hash::Hash> = block.inputs.iter().
-                filter_map(|x|
+                filter_map(|(_, x)|
                    self.pool.get_external_spent_output(&x.commitment())).
                 map(|x| x.destination_hash().unwrap()).
                 collect();
 
             let mut conflicting_outputs: Vec<hash::Hash> = block.outputs.iter().
-                filter_map(|x: &transaction::Output|
+                filter_map(|(_, x)|
                     self.pool.get_internal_spent_output(&x.commitment()).
                     or(self.pool.get_available_output(&x.commitment()))).
                 map(|x| x.source_hash().unwrap()).
