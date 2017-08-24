@@ -165,12 +165,18 @@ impl Writeable for Block {
 			                [write_u64, self.outputs.len() as u64],
 			                [write_u64, self.kernels.len() as u64]);
 
-			for (_, inp) in &self.inputs {
-				try!(inp.write(writer));
-			}
-			for (_, out) in &self.outputs {
-				try!(out.write(writer));
-			}
+            let mut sorted_inputs = self.inputs.values().collect::<Vec<_>>();
+            sorted_inputs.sort_by_key(|inp| inp.hash());
+            for inp in sorted_inputs {
+                try!(inp.write(writer));
+            }
+
+            let mut sorted_outputs = self.outputs.values().collect::<Vec<_>>();
+            sorted_outputs.sort_by_key(|out| out.hash());
+            for out in sorted_outputs {
+                try!(out.write(writer));
+            }
+
 			for proof in &self.kernels {
 				try!(proof.write(writer));
 			}
@@ -271,18 +277,19 @@ impl Block {
 		let mut kernels = try_map_vec!(txs, |tx| tx.verify_sig(&secp));
 		kernels.push(reward_kern);
 
-        let mut inputs = HashMap::new();
-        let mut outputs = HashMap::new();
+        // TODO - clone one of them (inputs?) and merge the other one in
+        let mut all_inputs = HashMap::new();
+        let mut all_outputs = HashMap::new();
         for tx in txs {
-            for input in &tx.inputs {
-                inputs.insert(input.commitment(), *input);
+            for (&commitment, &input) in &tx.inputs {
+                all_inputs.insert(commitment, input);
             }
-            for output in &tx.outputs {
-                outputs.insert(output.commitment(), *output);
+            for (&commitment, &output) in &tx.outputs {
+                all_outputs.insert(commitment, output);
             }
         };
 
-		outputs.insert(reward_out.commitment(), reward_out);
+		all_outputs.insert(reward_out.commitment(), reward_out);
 
 		// calculate the overall Merkle tree and fees
 
@@ -294,8 +301,8 @@ impl Block {
 					total_difficulty: prev.pow.clone().to_difficulty() + prev.total_difficulty.clone(),
 					..Default::default()
 				},
-				inputs: inputs,
-				outputs: outputs,
+				inputs: all_inputs,
+				outputs: all_outputs,
 				kernels: kernels,
 			}
 			.compact())
@@ -603,11 +610,11 @@ mod test {
         let out = b.outputs.values().next().unwrap();
         assert!(out.features.contains(COINBASE_OUTPUT));
 
-        let mut tweaked_out = out.clone();
-        tweaked_out.features.remove(COINBASE_OUTPUT);
+        let mut invalid_out = out.clone();
+        invalid_out.features.remove(COINBASE_OUTPUT);
 
         let mut new_outputs: HashMap<Commitment, Output> = HashMap::new();
-        new_outputs.insert(tweaked_out.commitment(), tweaked_out);
+        new_outputs.insert(invalid_out.commitment(), invalid_out);
 
         let tweaked_block = Block {
             outputs: new_outputs,

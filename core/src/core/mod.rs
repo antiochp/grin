@@ -277,6 +277,11 @@ mod test {
 		assert_eq!(dtx.fee, 1);
 		assert_eq!(dtx.inputs.len(), 2);
 		assert_eq!(dtx.outputs.len(), 1);
+
+        println!("***********");
+        println!("{:?}", tx.inputs);
+        println!("{:?}", dtx.inputs);
+
 		assert_eq!(tx.hash(), dtx.hash());
 	}
 
@@ -302,9 +307,10 @@ mod test {
 		let (tx, _) =
 			build::transaction(vec![input_rand(75), output_rand(42), output_rand(32), with_fee(1)])
 				.unwrap();
-		let h = tx.outputs[0].hash();
+        let mut outputs = tx.outputs.values();
+		let h = outputs.next().unwrap().hash();
 		assert!(h != ZERO_HASH);
-		let h2 = tx.outputs[1].hash();
+		let h2 = outputs.next().unwrap().hash();
 		assert!(h != h2);
 	}
 
@@ -316,7 +322,7 @@ mod test {
 		btx.verify_sig(&secp).unwrap(); // unwrap will panic if invalid
 
 		// checks that the range proof on our blind output is sufficiently hiding
-		let Output { proof, .. } = btx.outputs[0];
+		let &Output { proof, .. } = btx.outputs.values().next().unwrap();
 		let info = secp.range_proof_info(proof);
 		assert!(info.min == 0);
 		assert!(info.max == u64::max_value());

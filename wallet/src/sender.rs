@@ -127,6 +127,7 @@ mod test {
 		let (tx2, _) = transaction(vec![input(coin.value, in_key.key)]).unwrap();
 
 		assert_eq!(in_key.key, out_key.key);
-		assert_eq!(tx.outputs[0].commitment(), tx2.inputs[0].commitment());
+		assert_eq!(tx.outputs.values().next().unwrap().commitment(),
+			tx2.inputs.values().next().unwrap().commitment());
 	}
 }

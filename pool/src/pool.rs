@@ -139,19 +139,18 @@ impl<T> TransactionPool<T> where T: BlockChain {
         let mut orphan_refs: Vec<graph::Edge> = Vec::new();
         let mut blockchain_refs: Vec<graph::Edge> = Vec::new();
 
-        for input in &tx.inputs {
-            let base = graph::Edge::new(None, Some(tx_hash),
-                input.commitment());
+        for (&commitment, _) in &tx.inputs {
+            let base = graph::Edge::new(None, Some(tx_hash), commitment);
 
             // Note that search_for_best_output does not examine orphans, by
             // design. If an incoming transaction consumes pool outputs already
             // spent by the orphans set, this does not preclude its inclusion
             // into the pool.
-            match self.search_for_best_output(&input.commitment()) {
+            match self.search_for_best_output(&commitment) {
                 Parent::PoolTransaction{tx_ref: x} => pool_refs.push(base.with_source(Some(x))),
                 Parent::BlockTransaction => blockchain_refs.push(base),
                 Parent::Unknown => orphan_refs.push(base),
-                Parent::AlreadySpent{other_tx: x} => return Err(PoolError::DoubleSpend{other_tx: x, spent_output: input.commitment()}),
+                Parent::AlreadySpent{other_tx: x} => return Err(PoolError::DoubleSpend{other_tx: x, spent_output: commitment}),
             }
         }
 
@@ -163,7 +162,7 @@ impl<T> TransactionPool<T> where T: BlockChain {
         // accepted, even though it is possible for them to be mined
         // with strict ordering. In the future, if desirable, this could
         // be node policy config or more intelligent.
-        for output in &tx.outputs {
+        for (_, output) in &tx.outputs {
             self.check_duplicate_outputs(output, is_orphan)?
         }
 
@@ -175,8 +174,8 @@ impl<T> TransactionPool<T> where T: BlockChain {
         // At this point we know if we're spending all known unspents and not
         // creating any duplicate unspents.
         let pool_entry = graph::PoolEntry::new(&tx);
-        let new_unspents = tx.outputs.iter().
-            map(|x| graph::Edge::new(Some(tx_hash), None, x.commitment())).
+        let new_unspents = tx.outputs.keys().
+            map(|&commitment| graph::Edge::new(Some(tx_hash), None, commitment)).
             collect();
 
         if !is_orphan {
@@ -414,8 +413,8 @@ impl<T> TransactionPool<T> where T: BlockChain {
 
         let tx_ref = self.transactions.get(&conflicting_tx);
 
-        for output in &tx_ref.unwrap().outputs {
-            match self.pool.get_internal_spent_output(&output.commitment()) {
+        for (commitment, _) in &tx_ref.unwrap().outputs {
+            match self.pool.get_internal_spent_output(commitment) {
                 Some(x) => {
                     if self.blockchain.get_unspent(&x.output_commitment()).is_none() {
                         self.mark_transaction(x.destination_hash().unwrap(), marked_txs);
