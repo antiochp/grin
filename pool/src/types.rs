@@ -104,10 +104,7 @@ pub trait BlockChain {
   /// is spent or if it doesn't exist. The blockchain is expected to produce
   /// a result with its current view of the most worked chain, ignoring
   /// orphans, etc.
-  fn get_unspent(&self, output_ref: &Commitment) -> Option<transaction::Output>;
-
-  /// Get the block header for an output by its commitment.
-  fn get_block_header_for_output(&self, output_ref: &Commitment) -> Option<block::BlockHeader>;
+  fn get_unspent(&self, output_ref: &Commitment) -> Option<(transaction::Output, block::BlockHeader)>;
 }
 
 /// Pool contains the elements of the graph that are connected, in full, to

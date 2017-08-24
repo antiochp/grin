@@ -293,11 +293,7 @@ impl PoolToChainAdapter {
 }
 
 impl pool::BlockChain for PoolToChainAdapter {
-	fn get_unspent(&self, output_ref: &Commitment) -> Option<Output> {
+	fn get_unspent(&self, output_ref: &Commitment) -> Option<(Output, BlockHeader)> {
 		self.chain.borrow().get_unspent(output_ref)
-	}
-
-	fn get_block_header_for_output(&self, output_ref: &Commitment) -> Option<BlockHeader> {
-		self.chain.borrow().get_block_header_for_output(output_ref)
 	}
 }

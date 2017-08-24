@@ -77,14 +77,9 @@ impl<T> TransactionPool<T> where T: BlockChain {
     // output designated by output_commitment.
     fn search_blockchain_unspents(&self, output_commitment: &Commitment) -> Option<Parent> {
         self.blockchain.get_unspent(output_commitment).
-            map(|output| match self.pool.get_blockchain_spent(output_commitment) {
+            map(|(output, header)| match self.pool.get_blockchain_spent(output_commitment) {
                 Some(x) => Parent::AlreadySpent{other_tx: x.destination_hash().unwrap()},
-                None => {
-                    match self.blockchain.get_block_header_for_output(output_commitment) {
-                        Some(header) => Parent::BlockTransaction{header, output},
-                        None => Parent::Unknown // TODO - what to return here (impossible situation?)
-                    }
-                }
+                None => Parent::BlockTransaction{header, output}
             })
     }
 
