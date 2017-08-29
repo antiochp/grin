@@ -19,6 +19,7 @@ use std::thread;
 use chain::{self, ChainAdapter};
 use core::core::{self, Output};
 use core::core::hash::{Hash, Hashed};
+use core::core::block::BlockHeader;
 use core::core::target::Difficulty;
 use p2p::{self, NetAdapter, Server, PeerStore, PeerData, State};
 use pool;
@@ -292,7 +293,7 @@ impl PoolToChainAdapter {
 }
 
 impl pool::BlockChain for PoolToChainAdapter {
-	fn get_unspent(&self, output_ref: &Commitment) -> Option<Output> {
+	fn get_unspent(&self, output_ref: &Commitment) -> Option<(Output, BlockHeader)> {
 		self.chain.borrow().get_unspent(output_ref)
 	}
 }

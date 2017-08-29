@@ -77,9 +77,9 @@ impl<T> TransactionPool<T> where T: BlockChain {
     // output designated by output_commitment.
     fn search_blockchain_unspents(&self, output_commitment: &Commitment) -> Option<Parent> {
         self.blockchain.get_unspent(output_commitment).
-            map(|_| match self.pool.get_blockchain_spent(output_commitment) {
+            map(|(output, header)| match self.pool.get_blockchain_spent(output_commitment) {
                 Some(x) => Parent::AlreadySpent{other_tx: x.destination_hash().unwrap()},
-                None => Parent::BlockTransaction,
+                None => Parent::BlockTransaction{header, output}
             })
     }
 
@@ -109,7 +109,7 @@ impl<T> TransactionPool<T> where T: BlockChain {
 
     /// Attempts to add a transaction to the pool.
     ///
-    /// Adds a transation to the memory pool, deferring to the orphans pool
+    /// Adds a transaction to the memory pool, deferring to the orphans pool
     /// if necessary, and performing any connection-related validity checks.
     /// Happens under an exclusive mutable reference gated by the write portion
     /// of a RWLock.
@@ -132,7 +132,6 @@ impl<T> TransactionPool<T> where T: BlockChain {
             return Err(PoolError::AlreadyInPool)
         }
 
-
         // The next issue is to identify all unspent outputs that
         // this transaction will consume and make sure they exist in the set.
         let mut pool_refs: Vec<graph::Edge> = Vec::new();
@@ -149,7 +148,17 @@ impl<T> TransactionPool<T> where T: BlockChain {
             // into the pool.
             match self.search_for_best_output(&input.commitment()) {
                 Parent::PoolTransaction{tx_ref: x} => pool_refs.push(base.with_source(Some(x))),
-                Parent::BlockTransaction => blockchain_refs.push(base),
+                Parent::BlockTransaction{header, output} => {
+                    println!("height of block for output - {}", header.height);
+                    println!("output features (is it a coinbase?) - {:?}", output.features);
+
+                    // TODO - we need the height of the current block I guess...
+
+                    // if coinbase output has not matured -
+                    // PoolError::ImmatureCoinbase(header, output.commitment())
+
+                    blockchain_refs.push(base)
+                }
                 Parent::Unknown => orphan_refs.push(base),
                 Parent::AlreadySpent{other_tx: x} => return Err(PoolError::DoubleSpend{other_tx: x, spent_output: input.commitment()}),
             }
@@ -540,7 +549,7 @@ mod tests {
             expect_output_parent!(read_pool,
                 Parent::AlreadySpent{other_tx: _}, 11, 5);
             expect_output_parent!(read_pool,
-                Parent::BlockTransaction, 8);
+                Parent::BlockTransaction{header: _, output: _}, 8);
             expect_output_parent!(read_pool,
                 Parent::Unknown, 20);
 
@@ -750,7 +759,7 @@ mod tests {
             assert_eq!(read_pool.total_size(), 4);
 
             // We should have available blockchain outputs at 9 and 3
-            expect_output_parent!(read_pool, Parent::BlockTransaction, 9, 3);
+            expect_output_parent!(read_pool, Parent::BlockTransaction{header: _, output: _}, 9, 3);
 
             // We should have spent blockchain outputs at 4 and 7
             expect_output_parent!(read_pool,

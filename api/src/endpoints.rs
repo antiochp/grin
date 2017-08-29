@@ -76,11 +76,10 @@ impl ApiEndpoint for OutputApi {
 		debug!("GET output {}", id);
 		let c = util::from_hex(id.clone()).map_err(|_| Error::Argument(format!("Not a valid commitment: {}", id)))?;
 
-    match self.chain.get_unspent(&Commitment::from_vec(c)) {
-      Some(utxo) => Ok(utxo),
-      None => Err(Error::NotFound),
-    }
-
+    	match self.chain.get_unspent(&Commitment::from_vec(c)) {
+      		Some((output, _)) => Ok(output),
+      		None => Err(Error::NotFound),
+    	}
 	}
 }
 

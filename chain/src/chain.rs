@@ -210,13 +210,12 @@ impl Chain {
 		}
 	}
 
-	/// Gets an unspent output from its commitment. With return None if the
-	/// output
-	/// doesn't exist or has been spent. This querying is done in a way that's
-	/// constistent with the current chain state and more specifically the
-	/// current
-	/// branch it is on in case of forks.
-	pub fn get_unspent(&self, output_ref: &Commitment) -> Option<Output> {
+	/// Gets an unspent output from its commitment.
+    /// With return None if the output doesn't exist or has been spent.
+    /// This querying is done in a way that's
+	/// consistent with the current chain state and more specifically the
+	/// current branch it is on in case of forks.
+	pub fn get_unspent(&self, output_ref: &Commitment) -> Option<(Output, BlockHeader)> {
 		// TODO use an actual UTXO tree
 		// in the meantime doing it the *very* expensive way:
 		//   1. check the output exists
@@ -231,8 +230,15 @@ impl Chain {
 						return None;
 					}
 				}
+                for output in b.outputs {
+                    if output.commitment() == *output_ref {
+                        return Some((out, b.header));
+                    }
+                }
+                // did not find the original output so presumably not spent *or* unspent?
+                // TODO - confirm what we should do in this case...
 				if b.header.height == 1 {
-					return Some(out);
+					return None;
 				} else {
 					block_h = b.header.previous;
 				}

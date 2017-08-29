@@ -90,8 +90,14 @@ impl DummyChainImpl {
 }
 
 impl BlockChain for DummyChainImpl {
-    fn get_unspent(&self, commitment: &Commitment) -> Option<transaction::Output> {
-        self.utxo.read().unwrap().get_output(commitment).cloned()
+    fn get_unspent(&self, commitment: &Commitment) -> Option<(transaction::Output, block::BlockHeader)> {
+        let utxo_set = self.utxo.read().unwrap();
+        let output = utxo_set.get_output(commitment);
+        let header = block::BlockHeader::default();
+        match output {
+            Some(&out) => Some((out, header)),
+            None => None
+        }
     }
 }
 
