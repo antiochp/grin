@@ -15,6 +15,7 @@
 //! Transactions
 
 use byteorder::{ByteOrder, BigEndian};
+use std::collections::HashMap;
 use secp::{self, Secp256k1, Message, Signature};
 use secp::pedersen::{RangeProof, Commitment};
 
@@ -90,10 +91,10 @@ impl TxKernel {
 /// A transaction
 #[derive(Debug, Clone)]
 pub struct Transaction {
-	/// Set of inputs spent by the transaction.
-	pub inputs: Vec<Input>,
-	/// Set of outputs the transaction produces.
-	pub outputs: Vec<Output>,
+	/// Inputs spent by the transaction indexed by commitment.
+	pub inputs: HashMap<Commitment, Input>,
+	/// Outputs the transaction produces indexed by commitment.
+	pub outputs: HashMap<Commitment, Output>,
 	/// Fee paid by the transaction.
 	pub fee: u64,
 	/// The signature proving the excess is a valid public key, which signs
@@ -110,12 +111,18 @@ impl Writeable for Transaction {
 		                [write_bytes, &self.excess_sig],
 		                [write_u64, self.inputs.len() as u64],
 		                [write_u64, self.outputs.len() as u64]);
-		for inp in &self.inputs {
-			try!(inp.write(writer));
-		}
-		for out in &self.outputs {
-			try!(out.write(writer));
-		}
+
+        let mut sorted_inputs = self.inputs.values().collect::<Vec<_>>();
+        sorted_inputs.sort_by_key(|inp| inp.hash());
+        for inp in sorted_inputs {
+            try!(inp.write(writer));
+        }
+
+        let mut sorted_outputs = self.outputs.values().collect::<Vec<_>>();
+        sorted_outputs.sort_by_key(|out| out.hash());
+        for out in sorted_outputs {
+            try!(out.write(writer));
+        }
 		Ok(())
 	}
 }
@@ -127,8 +134,17 @@ impl Readable for Transaction {
 		let (fee, excess_sig, input_len, output_len) =
 			ser_multiread!(reader, read_u64, read_vec, read_u64, read_u64);
 
-		let inputs = try!((0..input_len).map(|_| Input::read(reader)).collect());
-		let outputs = try!((0..output_len).map(|_| Output::read(reader)).collect());
+        let mut inputs = HashMap::new();
+        for _ in 0..input_len {
+            let input = try!(Input::read(reader));
+            inputs.insert(input.commitment(), input);
+        };
+
+        let mut outputs = HashMap::new();
+        for _ in 0..output_len {
+            let output = try!(Output::read(reader));
+            outputs.insert(output.commitment(), output);
+        }
 
 		Ok(Transaction {
 			fee: fee,
@@ -142,11 +158,11 @@ impl Readable for Transaction {
 
 
 impl Committed for Transaction {
-	fn inputs_committed(&self) -> &Vec<Input> {
-		&self.inputs
+    fn inputs_committed(&self) -> Vec<Input> {
+        self.inputs.values().map(|&inp| inp).collect::<Vec<_>>().clone()
 	}
-	fn outputs_committed(&self) -> &Vec<Output> {
-		&self.outputs
+	fn outputs_committed(&self) -> Vec<Output> {
+        self.outputs.values().map(|&out| out).collect::<Vec<_>>().clone()
 	}
 	fn overage(&self) -> i64 {
 		(self.fee as i64)
@@ -165,19 +181,30 @@ impl Transaction {
 		Transaction {
 			fee: 0,
 			excess_sig: vec![],
-			inputs: vec![],
-			outputs: vec![],
+			inputs: HashMap::new(),
+			outputs: HashMap::new(),
 		}
 	}
 
 	/// Creates a new transaction initialized with the provided inputs,
 	/// outputs and fee.
 	pub fn new(inputs: Vec<Input>, outputs: Vec<Output>, fee: u64) -> Transaction {
+
+        let mut map_inputs = HashMap::new();
+        for input in inputs {
+            map_inputs.insert(input.commitment(), input);
+        };
+
+        let mut map_outputs = HashMap::new();
+        for output in outputs {
+            map_outputs.insert(output.commitment(), output);
+        };
+
 		Transaction {
 			fee: fee,
 			excess_sig: vec![],
-			inputs: inputs,
-			outputs: outputs,
+			inputs: map_inputs,
+			outputs: map_outputs,
 		}
 	}
 
@@ -185,7 +212,7 @@ impl Transaction {
 	/// inputs, if any, are kept intact.
 	pub fn with_input(self, input: Input) -> Transaction {
 		let mut new_ins = self.inputs;
-		new_ins.push(input);
+		new_ins.insert(input.commitment(), input);
 		Transaction { inputs: new_ins, ..self }
 	}
 
@@ -193,7 +220,7 @@ impl Transaction {
 	/// outputs, if any, are kept intact.
 	pub fn with_output(self, output: Output) -> Transaction {
 		let mut new_outs = self.outputs;
-		new_outs.push(output);
+		new_outs.insert(output.commitment(), output);
 		Transaction { outputs: new_outs, ..self }
 	}
 
@@ -230,7 +257,7 @@ impl Transaction {
 	/// excess value against the signature as well as range proofs for each
 	/// output.
 	pub fn validate(&self, secp: &Secp256k1) -> Result<TxKernel, secp::Error> {
-		for out in &self.outputs {
+		for (_, out) in &self.outputs {
 			out.verify_proof(secp)?;
 		}
 		self.verify_sig(secp)
@@ -339,9 +366,15 @@ impl Output {
 
 /// Utility function to calculate the Merkle root of vectors of inputs and
 /// outputs.
-pub fn merkle_inputs_outputs(inputs: &Vec<Input>, outputs: &Vec<Output>) -> Hash {
-	let mut all_hs = map_vec!(inputs, |inp| inp.hash());
-	all_hs.append(&mut map_vec!(outputs, |out| out.hash()));
+pub fn merkle_inputs_outputs(inputs: Vec<Input>, outputs: Vec<Output>) -> Hash {
+    // TODO - feel like this is unnecessarily inefficient, lots of cloning and sorting
+    let mut sorted_inputs = inputs.clone();
+    sorted_inputs.sort_by_key(|inp| inp.hash());
+    let mut sorted_outputs = outputs.clone();
+    sorted_outputs.sort_by_key(|out| out.hash());
+
+	let mut all_hs = map_vec!(&sorted_inputs, |inp| inp.hash());
+	all_hs.append(&mut map_vec!(&sorted_outputs, |out| out.hash()));
 	MerkleRow::new(all_hs).root()
 }
 

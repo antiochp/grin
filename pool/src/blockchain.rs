@@ -35,20 +35,20 @@ impl DummyUtxoSet {
     }
     pub fn apply(&self, b: &block::Block) -> DummyUtxoSet {
         let mut new_hashmap = self.outputs.clone();
-        for input in &b.inputs {
-            new_hashmap.remove(&input.commitment());
+        for (commitment, _) in &b.inputs {
+            new_hashmap.remove(commitment);
         }
-        for output in &b.outputs {
-            new_hashmap.insert(output.commitment(), output.clone());
+        for (&commitment, output) in &b.outputs {
+            new_hashmap.insert(commitment, output.clone());
         }
         DummyUtxoSet{outputs: new_hashmap}
     }
     pub fn with_block(&mut self, b: &block::Block) {
-        for input in &b.inputs {
-            self.outputs.remove(&input.commitment());
+        for (commitment, _) in &b.inputs {
+            self.outputs.remove(commitment);
         }
-        for output in &b.outputs {
-            self.outputs.insert(output.commitment(), output.clone());
+        for (&commitment, output) in &b.outputs {
+            self.outputs.insert(commitment, output.clone());
         }
     }
     pub fn rewind(&self, _: &block::Block) -> DummyUtxoSet {

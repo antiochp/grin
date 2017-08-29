@@ -179,7 +179,7 @@ impl Pool {
 
         self.graph.remove_vertex(graph::transaction_identifier(tx));
 
-        for input in tx.inputs.iter().map(|x| x.commitment()) {
+        for input in tx.inputs.keys() {
             match self.graph.remove_edge_by_commitment(&input) {
                 Some(x) => {
                     if !marked_txs.contains_key(&x.source_hash().unwrap()) {
@@ -193,7 +193,7 @@ impl Pool {
             };
         }
 
-        for output in tx.outputs.iter().map(|x| x.commitment()) {
+        for output in tx.outputs.keys() {
             match self.graph.remove_edge_by_commitment(&output) {
                 Some(x) => {
                     if !marked_txs.contains_key(

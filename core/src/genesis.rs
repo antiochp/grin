@@ -22,6 +22,8 @@ use core::hash::Hashed;
 use core::target::Difficulty;
 use global;
 
+use std::collections::HashMap;
+
 /// Genesis block definition. It has no rewards, no inputs, no outputs, no
 /// fees and a height of zero.
 pub fn genesis() -> core::Block {
@@ -44,8 +46,8 @@ pub fn genesis() -> core::Block {
 			nonce: global::get_genesis_nonce(),
 			pow: core::Proof::zero(proof_size), // TODO get actual PoW solution
 		},
-		inputs: vec![],
-		outputs: vec![],
+		inputs: HashMap::new(),
+		outputs: HashMap::new(),
 		kernels: vec![],
 	}
 }

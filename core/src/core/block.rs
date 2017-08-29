@@ -17,7 +17,8 @@
 use time;
 use secp::{self, Secp256k1};
 use secp::key::SecretKey;
-use std::collections::HashSet;
+use secp::pedersen::Commitment;
+use std::collections::{HashMap, HashSet};
 
 use core::Committed;
 use core::{Input, Output, Proof, TxKernel, Transaction, COINBASE_KERNEL, COINBASE_OUTPUT};
@@ -28,6 +29,8 @@ use core::hash::{Hash, Hashed, ZERO_HASH};
 use core::target::Difficulty;
 use ser::{self, Readable, Reader, Writeable, Writer};
 use global;
+
+
 
 bitflags! {
     /// Options for block validation
@@ -141,10 +144,10 @@ impl Readable for BlockHeader {
 pub struct Block {
 	/// The header with metadata and commitments to the rest of the data
 	pub header: BlockHeader,
-	/// List of transaction inputs
-	pub inputs: Vec<Input>,
-	/// List of transaction outputs
-	pub outputs: Vec<Output>,
+	/// Transaction inputs indexed by their commitments
+	pub inputs: HashMap<Commitment, Input>,
+	/// Transaction outputs indexed by their commitments
+	pub outputs: HashMap<Commitment, Output>,
 	/// List of transaction kernels and associated proofs
 	pub kernels: Vec<TxKernel>,
 }
@@ -162,12 +165,18 @@ impl Writeable for Block {
 			                [write_u64, self.outputs.len() as u64],
 			                [write_u64, self.kernels.len() as u64]);
 
-			for inp in &self.inputs {
-				try!(inp.write(writer));
-			}
-			for out in &self.outputs {
-				try!(out.write(writer));
-			}
+            let mut sorted_inputs = self.inputs.values().collect::<Vec<_>>();
+            sorted_inputs.sort_by_key(|inp| inp.hash());
+            for inp in sorted_inputs {
+                try!(inp.write(writer));
+            }
+
+            let mut sorted_outputs = self.outputs.values().collect::<Vec<_>>();
+            sorted_outputs.sort_by_key(|out| out.hash());
+            for out in sorted_outputs {
+                try!(out.write(writer));
+            }
+
 			for proof in &self.kernels {
 				try!(proof.write(writer));
 			}
@@ -185,8 +194,18 @@ impl Readable for Block {
 		let (input_len, output_len, proof_len) =
 			ser_multiread!(reader, read_u64, read_u64, read_u64);
 
-		let inputs = try!((0..input_len).map(|_| Input::read(reader)).collect());
-		let outputs = try!((0..output_len).map(|_| Output::read(reader)).collect());
+        let mut inputs = HashMap::new();
+        for _ in 0..input_len {
+            let input = try!(Input::read(reader));
+            inputs.insert(input.commitment(), input);
+        };
+
+        let mut outputs = HashMap::new();
+        for _ in 0..output_len {
+            let output = try!(Output::read(reader));
+            outputs.insert(output.commitment(), output);
+        };
+
 		let kernels = try!((0..proof_len).map(|_| TxKernel::read(reader)).collect());
 
 		Ok(Block {
@@ -202,12 +221,14 @@ impl Readable for Block {
 /// Provides all information from a block that allows the calculation of total
 /// Pedersen commitment.
 impl Committed for Block {
-	fn inputs_committed(&self) -> &Vec<Input> {
-		&self.inputs
+	fn inputs_committed(&self) -> Vec<Input> {
+        self.inputs.values().map(|&inp| inp).collect::<Vec<_>>().clone()
 	}
-	fn outputs_committed(&self) -> &Vec<Output> {
-		&self.outputs
+
+	fn outputs_committed(&self) -> Vec<Output> {
+        self.outputs.values().map(|&out| out).collect::<Vec<_>>().clone()
 	}
+
 	fn overage(&self) -> i64 {
 		(self.total_fees() as i64) - (REWARD as i64)
 	}
@@ -218,8 +239,8 @@ impl Default for Block {
 	fn default() -> Block {
 		Block {
 			header: Default::default(),
-			inputs: vec![],
-			outputs: vec![],
+			inputs: HashMap::new(),
+			outputs: HashMap::new(),
 			kernels: vec![],
 		}
 	}
@@ -256,25 +277,19 @@ impl Block {
 		let mut kernels = try_map_vec!(txs, |tx| tx.verify_sig(&secp));
 		kernels.push(reward_kern);
 
-		// build vectors with all inputs and all outputs, ordering them by hash
-		// needs to be a fold so we don't end up with a vector of vectors and we
-		// want to fullt own the refs (not just a pointer like flat_map).
-		let mut inputs = txs.iter()
-			.fold(vec![], |mut acc, ref tx| {
-				let mut inputs = tx.inputs.clone();
-				acc.append(&mut inputs);
-				acc
-			});
-		let mut outputs = txs.iter()
-			.fold(vec![], |mut acc, ref tx| {
-				let mut outputs = tx.outputs.clone();
-				acc.append(&mut outputs);
-				acc
-			});
-		outputs.push(reward_out);
+        // TODO - clone one of them (inputs?) and merge the other one in
+        let mut all_inputs = HashMap::new();
+        let mut all_outputs = HashMap::new();
+        for tx in txs {
+            for (&commitment, &input) in &tx.inputs {
+                all_inputs.insert(commitment, input);
+            }
+            for (&commitment, &output) in &tx.outputs {
+                all_outputs.insert(commitment, output);
+            }
+        };
 
-		inputs.sort_by_key(|inp| inp.hash());
-		outputs.sort_by_key(|out| out.hash());
+		all_outputs.insert(reward_out.commitment(), reward_out);
 
 		// calculate the overall Merkle tree and fees
 
@@ -286,8 +301,8 @@ impl Block {
 					total_difficulty: prev.pow.clone().to_difficulty() + prev.total_difficulty.clone(),
 					..Default::default()
 				},
-				inputs: inputs,
-				outputs: outputs,
+				inputs: all_inputs,
+				outputs: all_outputs,
 				kernels: kernels,
 			}
 			.compact())
@@ -305,32 +320,23 @@ impl Block {
 	}
 
 	/// Matches any output with a potential spending input, eliminating them
-	/// from the block. Provides a simple way to compact the block. The
-	/// elimination is stable with respect to inputs and outputs order.
+	/// from the block. Provides a simple way to compact the block.
 	pub fn compact(&self) -> Block {
-		// the chosen ones
-		let mut new_inputs = vec![];
+        let in_set = self.inputs.keys().map(|&commit| commit).collect::<HashSet<Commitment>>();
+        let out_set = self.outputs.keys().map(|&commit| commit).collect::<HashSet<Commitment>>();
+        let intersect = in_set.intersection(&out_set).collect::<HashSet<_>>();
 
-		// build a set of all output commitments
-		let mut out_set = HashSet::new();
-		for out in &self.outputs {
-			out_set.insert(out.commitment());
-		}
-		// removes from the set any hash referenced by an input, keeps the inputs that
-		// don't have a match
-		for inp in &self.inputs {
-			if !out_set.remove(&inp.commitment()) {
-				new_inputs.push(*inp);
-			}
-		}
-		// we got ourselves a keep list in that set
-		let new_outputs = self.outputs
-			.iter()
-			.filter(|out| out_set.contains(&(out.commitment())))
-			.map(|&out| out)
-			.collect::<Vec<Output>>();
+        // the chosen ones
+        let mut new_inputs = self.inputs.clone();
+        new_inputs.retain(|commit, _| !intersect.contains(commit));
 
-		let tx_merkle = merkle_inputs_outputs(&new_inputs, &new_outputs);
+        let mut new_outputs = self.outputs.clone();
+        new_outputs.retain(|commit, _| !intersect.contains(commit));
+
+        let inputs_for_merkle = new_inputs.values().map(|&inp| inp).collect::<Vec<_>>();
+        let outputs_for_merkle = new_outputs.values().map(|&out| out).collect::<Vec<_>>();
+
+		let tx_merkle = merkle_inputs_outputs(inputs_for_merkle, outputs_for_merkle);
 
 		Block {
 			header: BlockHeader {
@@ -351,16 +357,17 @@ impl Block {
 	/// Also performs a compaction on the result.
 	pub fn merge(&self, other: Block) -> Block {
 		let mut all_inputs = self.inputs.clone();
-		all_inputs.append(&mut other.inputs.clone());
+        for (commit, inp) in other.inputs {
+            all_inputs.insert(commit.clone(), inp.clone());
+        };
 
 		let mut all_outputs = self.outputs.clone();
-		all_outputs.append(&mut other.outputs.clone());
+        for (commit, out) in other.outputs {
+            all_outputs.insert(commit.clone(), out.clone());
+        };
 
 		let mut all_kernels = self.kernels.clone();
 		all_kernels.append(&mut other.kernels.clone());
-
-		all_inputs.sort_by_key(|inp| inp.hash());
-		all_outputs.sort_by_key(|out| out.hash());
 
 		Block {
 				// compact will fix the merkle tree
@@ -389,7 +396,12 @@ impl Block {
 
     /// Verify the transaction Merkle root
     pub fn verify_merkle_inputs_outputs(&self) -> Result<(), secp::Error> {
-        let tx_merkle = merkle_inputs_outputs(&self.inputs, &self.outputs);
+        // TODO - investigate how to use map_vec! or even skip this map step somehow?
+        let inputs_for_merkle = self.inputs.values().map(|&inp| inp).collect::<Vec<_>>();
+        let outputs_for_merkle = self.outputs.values().map(|&out| out).collect::<Vec<_>>();
+
+        let tx_merkle = merkle_inputs_outputs(inputs_for_merkle, outputs_for_merkle);
+
         if tx_merkle != self.header.tx_merkle {
             // TODO more specific error
             return Err(secp::Error::IncorrectCommitSum);
@@ -427,11 +439,13 @@ impl Block {
 	// * That the sum of blinding factors for all coinbase-marked outputs match
 	//   the coinbase-marked kernels.
 	fn verify_coinbase(&self, secp: &Secp256k1) -> Result<(), secp::Error> {
-		let cb_outs = self.outputs
-			.iter()
-			.filter(|out| out.features.intersects(COINBASE_OUTPUT))
-			.map(|o| o.clone())
-			.collect::<Vec<_>>();
+        let mut cb_outs = HashMap::new();
+        for (commit, out) in &self.outputs {
+            if out.features.intersects(COINBASE_OUTPUT) {
+                cb_outs.insert(commit.clone(), out.clone());
+            };
+        };
+
 		let cb_kerns = self.kernels
 			.iter()
 			.filter(|k| k.features.intersects(COINBASE_KERNEL))
@@ -442,7 +456,7 @@ impl Block {
 		// and kernels checks all we need
 		Block {
 				header: BlockHeader::default(),
-				inputs: vec![],
+				inputs: HashMap::new(),
 				outputs: cb_outs,
 				kernels: cb_kerns,
 			}
@@ -568,7 +582,7 @@ mod test {
         assert_eq!(b.kernels.len(), 1);
 
         let coinbase_outputs = b.outputs
-			.iter()
+			.values()
 			.filter(|out| out.features.contains(COINBASE_OUTPUT))
             .map(|o| o.clone())
 			.collect::<Vec<_>>();
@@ -585,22 +599,33 @@ mod test {
         assert_eq!(b.validate(&secp), Ok(()));
     }
 
+
     #[test]
     // test that flipping the COINBASE_OUTPUT flag on the output features
     // invalidates the block and specifically it causes verify_coinbase to fail
     // additionally verifying the merkle_inputs_outputs also fails
     fn remove_coinbase_output_flag() {
         let ref secp = new_secp();
-        let mut b = new_block(vec![], secp);
+        let b = new_block(vec![], secp);
+        let out = b.outputs.values().next().unwrap();
+        assert!(out.features.contains(COINBASE_OUTPUT));
 
-        assert!(b.outputs[0].features.contains(COINBASE_OUTPUT));
-        b.outputs[0].features.remove(COINBASE_OUTPUT);
+        let mut invalid_out = out.clone();
+        invalid_out.features.remove(COINBASE_OUTPUT);
 
-        assert_eq!(b.verify_coinbase(&secp), Err(secp::Error::IncorrectCommitSum));
-        assert_eq!(b.verify_kernels(&secp), Ok(()));
-        assert_eq!(b.verify_merkle_inputs_outputs(), Err(secp::Error::IncorrectCommitSum));
+        let mut new_outputs: HashMap<Commitment, Output> = HashMap::new();
+        new_outputs.insert(invalid_out.commitment(), invalid_out);
 
-        assert_eq!(b.validate(&secp), Err(secp::Error::IncorrectCommitSum));
+        let tweaked_block = Block {
+            outputs: new_outputs,
+            .. b
+        };
+
+        assert_eq!(tweaked_block.verify_coinbase(&secp), Err(secp::Error::IncorrectCommitSum));
+        assert_eq!(tweaked_block.verify_kernels(&secp), Ok(()));
+        assert_eq!(tweaked_block.verify_merkle_inputs_outputs(), Err(secp::Error::IncorrectCommitSum));
+
+        assert_eq!(tweaked_block.validate(&secp), Err(secp::Error::IncorrectCommitSum));
     }
 
     #[test]

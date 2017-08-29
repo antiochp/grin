@@ -46,7 +46,7 @@ pub trait Committed {
 	fn sum_commitments(&self, secp: &Secp256k1) -> Result<Commitment, secp::Error> {
 		// first, verify each range proof
 		let ref outputs = self.outputs_committed();
-		for output in *outputs {
+		for output in outputs {
 			try!(output.verify_proof(secp))
 		}
 
@@ -71,10 +71,10 @@ pub trait Committed {
 	}
 
 	/// Vector of committed inputs to verify
-	fn inputs_committed(&self) -> &Vec<Input>;
+	fn inputs_committed(&self) -> Vec<Input>;
 
 	/// Vector of committed inputs to verify
-	fn outputs_committed(&self) -> &Vec<Output>;
+	fn outputs_committed(&self) -> Vec<Output>;
 
 	/// The overage amount expected over the commitments. Can be negative (a
 	/// fee) or positive (a reward).
@@ -85,7 +85,7 @@ pub trait Committed {
 pub struct Proof {
     /// The nonces
 	pub nonces:Vec<u32>,
-    
+
     /// The proof size
     pub proof_size: usize,
 }
@@ -277,6 +277,11 @@ mod test {
 		assert_eq!(dtx.fee, 1);
 		assert_eq!(dtx.inputs.len(), 2);
 		assert_eq!(dtx.outputs.len(), 1);
+
+        println!("***********");
+        println!("{:?}", tx.inputs);
+        println!("{:?}", dtx.inputs);
+
 		assert_eq!(tx.hash(), dtx.hash());
 	}
 
@@ -302,9 +307,10 @@ mod test {
 		let (tx, _) =
 			build::transaction(vec![input_rand(75), output_rand(42), output_rand(32), with_fee(1)])
 				.unwrap();
-		let h = tx.outputs[0].hash();
+        let mut outputs = tx.outputs.values();
+		let h = outputs.next().unwrap().hash();
 		assert!(h != ZERO_HASH);
-		let h2 = tx.outputs[1].hash();
+		let h2 = outputs.next().unwrap().hash();
 		assert!(h != h2);
 	}
 
@@ -316,7 +322,7 @@ mod test {
 		btx.verify_sig(&secp).unwrap(); // unwrap will panic if invalid
 
 		// checks that the range proof on our blind output is sufficiently hiding
-		let Output { proof, .. } = btx.outputs[0];
+		let &Output { proof, .. } = btx.outputs.values().next().unwrap();
 		let info = secp.range_proof_info(proof);
 		assert!(info.min == 0);
 		assert!(info.max == u64::max_value());
