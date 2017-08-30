@@ -214,7 +214,7 @@ impl Chain {
     /// Gets an unspent output from its commitment. With return None if the
 	/// output
 	/// doesn't exist or has been spent. This querying is done in a way that's
-	/// constistent with the current chain state and more specifically the
+	/// consistent with the current chain state and more specifically the
 	/// current
 	/// branch it is on in case of forks.
 	pub fn get_unspent(&self, output_ref: &Commitment) -> Option<Output> {
@@ -253,8 +253,12 @@ impl Chain {
 	}
 
 	/// Block header for the chain head
-	pub fn head_header(&self) -> Result<BlockHeader, Error> {
-		self.store.head_header().map_err(&Error::StoreErr)
+	pub fn head_header(&self) -> Option<BlockHeader> {
+		let header = self.store.head_header();
+        match header {
+            Ok(h) => Some(h),
+            Err(_) => None,
+        }
 	}
 
 	/// Gets a block header by hash
@@ -275,10 +279,12 @@ impl Chain {
 	}
 
     /// Gets the block header by the provided output commitment
-    pub fn get_block_header_by_output_commit(&self, commit: &Commitment) -> Result<BlockHeader, Error> {
-        self.store.get_block_header_by_output_commit(commit).map_err(
-            &Error::StoreErr,
-        )
+    pub fn get_block_header_by_output_commit(&self, commit: &Commitment) -> Option<BlockHeader> {
+        let header = self.store.get_block_header_by_output_commit(commit);
+        match header {
+            Ok(h) => Some(h),
+            Err(_) => None,
+        }
     }
 
 	/// Get the tip of the header chain

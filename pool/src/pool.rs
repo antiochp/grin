@@ -20,6 +20,7 @@ pub use graph;
 use core::core::transaction;
 use core::core::block;
 use core::core::hash;
+use core::consensus;
 
 use secp;
 use secp::pedersen::Commitment;
@@ -77,9 +78,9 @@ impl<T> TransactionPool<T> where T: BlockChain {
     // output designated by output_commitment.
     fn search_blockchain_unspents(&self, output_commitment: &Commitment) -> Option<Parent> {
         self.blockchain.get_unspent(output_commitment).
-            map(|_| match self.pool.get_blockchain_spent(output_commitment) {
+            map(|output| match self.pool.get_blockchain_spent(output_commitment) {
                 Some(x) => Parent::AlreadySpent{other_tx: x.destination_hash().unwrap()},
-                None => Parent::BlockTransaction,
+                None => Parent::BlockTransaction{output},
             })
     }
 
@@ -132,7 +133,6 @@ impl<T> TransactionPool<T> where T: BlockChain {
             return Err(PoolError::AlreadyInPool)
         }
 
-
         // The next issue is to identify all unspent outputs that
         // this transaction will consume and make sure they exist in the set.
         let mut pool_refs: Vec<graph::Edge> = Vec::new();
@@ -140,8 +140,7 @@ impl<T> TransactionPool<T> where T: BlockChain {
         let mut blockchain_refs: Vec<graph::Edge> = Vec::new();
 
         for input in &tx.inputs {
-            let base = graph::Edge::new(None, Some(tx_hash),
-                input.commitment());
+            let base = graph::Edge::new(None, Some(tx_hash), input.commitment());
 
             // Note that search_for_best_output does not examine orphans, by
             // design. If an incoming transaction consumes pool outputs already
@@ -149,7 +148,22 @@ impl<T> TransactionPool<T> where T: BlockChain {
             // into the pool.
             match self.search_for_best_output(&input.commitment()) {
                 Parent::PoolTransaction{tx_ref: x} => pool_refs.push(base.with_source(Some(x))),
-                Parent::BlockTransaction => blockchain_refs.push(base),
+                Parent::BlockTransaction{output} => {
+                    // TODO - pull this out into a separate function?
+                    if output.features.contains(transaction::COINBASE_OUTPUT) {
+                        if let Some(out_header) = self.blockchain.get_block_header_by_output_commit(&output.commitment()) {
+                            if let Some(head_header) = self.blockchain.head_header() {
+                                if head_header.height <= out_header.height + consensus::COINBASE_MATURITY {
+                                    return Err(PoolError::ImmatureCoinbase{
+                                        header: out_header,
+                                        output: output.commitment()
+                                    })
+                                };
+                            };
+                        };
+                    };
+                    blockchain_refs.push(base);
+                },
                 Parent::Unknown => orphan_refs.push(base),
                 Parent::AlreadySpent{other_tx: x} => return Err(PoolError::DoubleSpend{other_tx: x, spent_output: input.commitment()}),
             }
@@ -540,7 +554,7 @@ mod tests {
             expect_output_parent!(read_pool,
                 Parent::AlreadySpent{other_tx: _}, 11, 5);
             expect_output_parent!(read_pool,
-                Parent::BlockTransaction, 8);
+                Parent::BlockTransaction{output: _}, 8);
             expect_output_parent!(read_pool,
                 Parent::Unknown, 20);
 
@@ -750,7 +764,7 @@ mod tests {
             assert_eq!(read_pool.total_size(), 4);
 
             // We should have available blockchain outputs at 9 and 3
-            expect_output_parent!(read_pool, Parent::BlockTransaction, 9, 3);
+            expect_output_parent!(read_pool, Parent::BlockTransaction{output: _}, 9, 3);
 
             // We should have spent blockchain outputs at 4 and 7
             expect_output_parent!(read_pool,
