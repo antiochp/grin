@@ -119,6 +119,7 @@ mod test {
 			n_child: out_key.n_child,
 			value: 5,
 			status: OutputStatus::Unconfirmed,
+			height: 0,
 		};
 
 		let (tx, _) = transaction(vec![output(coin.value, out_key.key)]).unwrap();

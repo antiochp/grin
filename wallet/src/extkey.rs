@@ -261,7 +261,7 @@ mod test {
 
 	use secp::Secp256k1;
 	use secp::key::SecretKey;
-	use super::ExtendedKey;
+	use super::{ExtendedKey, Fingerprint};
 	use self::serialize::hex::FromHex;
 
 	#[test]
@@ -279,7 +279,7 @@ mod test {
 		let depth = 0;
 		let n_child = 0;
 		assert_eq!(extk.key, secret_key);
-		assert_eq!(extk.fingerprint, fingerprint.as_slice());
+		assert_eq!(extk.fingerprint, Fingerprint::from_bytes(fingerprint.as_slice()));
 		assert_eq!(extk.chaincode, chaincode.as_slice());
 		assert_eq!(extk.depth, depth);
 		assert_eq!(extk.n_child, n_child);
@@ -301,7 +301,7 @@ mod test {
 		let depth = 1;
 		let n_child = 0;
 		assert_eq!(derived.key, secret_key);
-		assert_eq!(derived.fingerprint, fingerprint.as_slice());
+		assert_eq!(derived.fingerprint, Fingerprint::from_bytes(fingerprint.as_slice()));
 		assert_eq!(derived.chaincode, chaincode.as_slice());
 		assert_eq!(derived.depth, depth);
 		assert_eq!(derived.n_child, n_child);
