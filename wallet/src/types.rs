@@ -118,7 +118,7 @@ pub enum OutputStatus {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct OutputData {
 	/// Private key fingerprint (in case the wallet tracks multiple)
-	pub fingerprint: [u8; 4],
+	pub fingerprint: extkey::Fingerprint,
 	/// How many derivations down from the root key
 	pub n_child: u32,
 	/// Value of the output, necessary to rebuild the commitment
@@ -222,13 +222,13 @@ impl WalletData {
 	/// Select a subset of unspent outputs to spend in a transaction
 	/// transferring
 	/// the provided amount.
-	pub fn select(&self, fingerprint: [u8; 4], amount: u64) -> (Vec<OutputData>, i64) {
+	pub fn select(&self, fingerprint: &extkey::Fingerprint, amount: u64) -> (Vec<OutputData>, i64) {
 		let mut to_spend = vec![];
 		let mut input_total = 0;
 		// TODO very naive impl for now, there's definitely better coin selection
 		// algos available
 		for out in &self.outputs {
-			if out.status == OutputStatus::Unspent && out.fingerprint == fingerprint {
+			if out.status == OutputStatus::Unspent && out.fingerprint == *fingerprint {
 				to_spend.push(out.clone());
 				input_total += out.value;
 				if input_total >= amount {
@@ -240,10 +240,10 @@ impl WalletData {
 	}
 
 	/// Next child index when we want to create a new output.
-	pub fn next_child(&self, fingerprint: [u8; 4]) -> u32 {
+	pub fn next_child(&self, fingerprint: &extkey::Fingerprint) -> u32 {
 		let mut max_n = 0;
 		for out in &self.outputs {
-			if max_n < out.n_child && out.fingerprint == fingerprint {
+			if max_n < out.n_child && out.fingerprint == *fingerprint {
 				max_n = out.n_child;
 			}
 		}

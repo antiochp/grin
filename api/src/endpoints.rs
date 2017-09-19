@@ -24,12 +24,13 @@
 use std::sync::{Arc, RwLock};
 use std::thread;
 
-use core::core::{Transaction, Output};
+use core::core;
 use core::ser;
 use chain::{self, Tip};
 use pool;
 use rest::*;
-use secp::pedersen::Commitment;
+use types::Utxo;
+use secp::pedersen::{Commitment, RangeProof};
 use util;
 
 /// ApiEndpoint implementation for the blockchain. Exposes the current chain
@@ -62,9 +63,10 @@ pub struct OutputApi {
 	chain: Arc<chain::Chain>,
 }
 
+
 impl ApiEndpoint for OutputApi {
 	type ID = String;
-	type T = Output;
+	type T = Utxo;
 	type OP_IN = ();
 	type OP_OUT = ();
 
@@ -72,13 +74,12 @@ impl ApiEndpoint for OutputApi {
 		vec![Operation::Get]
 	}
 
-	fn get(&self, id: String) -> ApiResult<Output> {
-		debug!("GET output {}", id);
+	fn get(&self, id: String) -> ApiResult<Utxo> {
 		let c = util::from_hex(id.clone()).map_err(|_| Error::Argument(format!("Not a valid commitment: {}", id)))?;
 
 		// TODO - can probably clean up the error mapping here
 		match self.chain.get_unspent(&Commitment::from_vec(c)) {
-			Ok(utxo) => Ok(utxo),
+			Ok(utxo) => Ok(Utxo::from_output(utxo)),
 			Err(_) => Err(Error::NotFound),
 		}
 	}
@@ -123,7 +124,7 @@ impl<T> ApiEndpoint for PoolApi<T>
 		let tx_bin = util::from_hex(input.tx_hex)
       .map_err(|_| Error::Argument(format!("Invalid hex in transaction wrapper.")))?;
 
-		let tx: Transaction = ser::deserialize(&mut &tx_bin[..]).map_err(|_| {
+		let tx: core::Transaction = ser::deserialize(&mut &tx_bin[..]).map_err(|_| {
 				Error::Argument("Could not deserialize transaction, invalid format.".to_string())
 			})?;
 

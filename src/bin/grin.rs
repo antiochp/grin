@@ -198,8 +198,10 @@ fn main() {
                                  .help("Send the transaction to the provided server")
                                  .short("d")
                                  .long("dest")
-                                 .takes_value(true))))
-    .get_matches();
+                                 .takes_value(true)))
+				.subcommand(SubCommand::with_name("info")
+							.about("*** tbd - some wallet info")))
+	.get_matches();
 
 	match args.subcommand() {
 		// server commands and options
@@ -315,7 +317,6 @@ fn wallet_command(wallet_args: &ArgMatches) {
 		"Error deriving extended key from seed.",
 	);
 
-
 	let mut wallet_config = WalletConfig::default();
 	if let Some(port) = wallet_args.value_of("port") {
 		let default_ip = "127.0.0.1";
@@ -331,7 +332,6 @@ fn wallet_command(wallet_args: &ArgMatches) {
 	}
 
 	match wallet_args.subcommand() {
-
 		("receive", Some(receive_args)) => {
 			if let Some(f) = receive_args.value_of("input") {
 				let mut file = File::open(f).expect("Unable to open transaction file.");
@@ -357,7 +357,7 @@ fn wallet_command(wallet_args: &ArgMatches) {
 					error!("Failed to start Grin wallet receiver: {}.", e);
 				});
 			}
-		}
+		},
 		("send", Some(send_args)) => {
 			let amount = send_args
 				.value_of("amount")
@@ -369,7 +369,10 @@ fn wallet_command(wallet_args: &ArgMatches) {
 				dest = d;
 			}
 			wallet::issue_send_tx(&wallet_config, &key, amount, dest.to_string()).unwrap();
-		}
+		},
+		("info", Some(info_args)) => {
+			wallet::info(&wallet_config, &key);
+		},
 		_ => panic!("Unknown wallet command, use 'grin help wallet' for details"),
 	}
 }

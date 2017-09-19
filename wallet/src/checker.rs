@@ -16,7 +16,7 @@
 //! the wallet storage and update them.
 
 use api;
-use core::core::Output;
+// use api::Output;
 use secp::{self, pedersen};
 use util;
 
@@ -33,6 +33,7 @@ pub fn refresh_outputs(config: &WalletConfig, ext_key: &ExtendedKey) {
 
 		// check each output that's not spent
 		for out in &mut wallet_data.outputs {
+			println!("checking an output");
 			if out.status != OutputStatus::Spent {
 				// figure out the commitment
 				let key = ext_key.derive(&secp, out.n_child).unwrap();
@@ -41,10 +42,10 @@ pub fn refresh_outputs(config: &WalletConfig, ext_key: &ExtendedKey) {
 				// TODO check the pool for unconfirmed
 
 				let out_res = get_output_by_commitment(config, commitment);
-
 				if out_res.is_ok() {
 					// output is known, it's a new utxo
 					out.status = OutputStatus::Unspent;
+					// out.height = out_res.height;
 
 				} else if out.status == OutputStatus::Unspent {
 					// a UTXO we can't find anymore has been spent
@@ -64,9 +65,9 @@ pub fn refresh_outputs(config: &WalletConfig, ext_key: &ExtendedKey) {
 // confirmed
 fn get_output_by_commitment(config: &WalletConfig,
                             commit: pedersen::Commitment)
-                            -> Result<Output, api::Error> {
+                            -> Result<api::Utxo, api::Error> {
 	let url = format!("{}/v1/chain/utxo/{}",
 	                  config.check_node_api_http_addr,
 	                  util::to_hex(commit.as_ref().to_vec()));
-	api::client::get::<Output>(url.as_str())
+	api::client::get::<api::Utxo>(url.as_str())
 }
