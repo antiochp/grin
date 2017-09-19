@@ -13,12 +13,28 @@
 // limitations under the License.
 
 use core::core;
-use core::ser;
-use chain::{self, Tip};
-use pool;
-use rest::*;
+use chain;
 use secp::pedersen;
-use util;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Tip {
+	/// Height of the tip (max height of the fork)
+	pub height: u64,
+	// Last block pushed to the fork
+	// pub last_block_h: Hash,
+	// Block previous to last
+	// pub prev_block_h: Hash,
+	// Total difficulty accumulated on that fork
+	// pub total_difficulty: Difficulty,
+}
+
+impl Tip {
+	pub fn from_tip(tip: chain::Tip) -> Tip {
+		Tip {
+			height: tip.height,
+		}
+	}
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Utxo {
@@ -41,4 +57,14 @@ impl Utxo {
 			height: 0,
 		}
 	}
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct PoolInfo {
+	/// Size of the pool
+	pub pool_size: usize,
+	/// Size of orphans
+	pub orphans_size: usize,
+	/// Total size of pool + orphans
+	pub total_size: usize,
 }

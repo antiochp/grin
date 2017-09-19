@@ -12,29 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use api;
-use core::core::Output;
-use secp::{self, pedersen};
-use util;
-
+use secp;
 use checker;
 use extkey::ExtendedKey;
-use types::{WalletConfig, OutputStatus, WalletData};
+use types::{WalletConfig, WalletData};
 
 pub fn info(config: &WalletConfig, ext_key: &ExtendedKey) {
 	println!("about to refresh outputs");
 	checker::refresh_outputs(&config, ext_key);
-
+	println!("done refreshing outputs");
 	let secp = secp::Secp256k1::with_caps(secp::ContextFlag::Commit);
 
 	// operate within a lock on wallet data
 	let _ = WalletData::with_wallet(&config.data_file_dir, |wallet_data| {
 
+		println!("Outputs - ");
+		println!("fingerprint, height, status, value");
+		println!("----------------------------------");
 		for out in &mut wallet_data.outputs {
 			let key = ext_key.derive(&secp, out.n_child).unwrap();
-			let commitment = secp.commit(out.value, key.key).unwrap();
 
-			println!("output - {:?}, {:?}, {:?}, {:?}", key.identifier().fingerprint(), out.n_child, out.status, out.value);
+			println!(
+				"{}, {}, {:?}, {}",
+				key.identifier().fingerprint(),
+				out.height,
+				out.status,
+				out.value
+			);
 		}
 	});
 }

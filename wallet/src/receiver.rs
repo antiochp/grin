@@ -91,6 +91,7 @@ pub struct WalletReceiver {
 impl ApiEndpoint for WalletReceiver {
 	type ID = String;
 	type T = String;
+	type IDX_T = ();
 	type OP_IN = WalletReceiveRequest;
 	type OP_OUT = CbData;
 
@@ -169,6 +170,7 @@ fn receive_coinbase(config: &WalletConfig, ext_key: &ExtendedKey, amount: u64) -
 			n_child: coinbase_key.n_child,
 			value: amount,
 			status: OutputStatus::Unconfirmed,
+			height: 0,
 		});
 		debug!("Using child {} for a new coinbase output.",
 		       coinbase_key.n_child);
@@ -207,6 +209,7 @@ fn receive_transaction(config: &WalletConfig,
 			n_child: out_key.n_child,
 			value: amount,
 			status: OutputStatus::Unconfirmed,
+			height: 0,
 		});
 
 		debug!("Using child {} for a new transaction output.",

@@ -370,7 +370,7 @@ fn wallet_command(wallet_args: &ArgMatches) {
 			}
 			wallet::issue_send_tx(&wallet_config, &key, amount, dest.to_string()).unwrap();
 		},
-		("info", Some(info_args)) => {
+		("info", Some(_)) => {
 			wallet::info(&wallet_config, &key);
 		},
 		_ => panic!("Unknown wallet command, use 'grin help wallet' for details"),

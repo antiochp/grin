@@ -82,6 +82,15 @@ impl PartialEq for Fingerprint {
 	}
 }
 
+impl ::std::fmt::Display for Fingerprint {
+	fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+		for i in self.0.iter().cloned() {
+			try!(write!(f, "{:02x}", i));
+		}
+		write!(f, "")
+	}
+}
+
 impl ::std::fmt::Debug for Fingerprint {
 	fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
 		try!(write!(f, "{}(", stringify!(Fingerprint)));

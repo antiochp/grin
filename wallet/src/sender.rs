@@ -82,6 +82,7 @@ fn build_send_tx(config: &WalletConfig, ext_key: &ExtendedKey, amount: u64) -> R
 			n_child: change_key.n_child,
 			value: change as u64,
 			status: OutputStatus::Unconfirmed,
+			height: 0,
 		});
 		for mut coin in coins {
 			coin.lock();

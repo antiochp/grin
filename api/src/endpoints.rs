@@ -24,13 +24,13 @@
 use std::sync::{Arc, RwLock};
 use std::thread;
 
+use chain;
 use core::core;
 use core::ser;
-use chain::{self, Tip};
 use pool;
 use rest::*;
-use types::Utxo;
-use secp::pedersen::{Commitment, RangeProof};
+use types::{PoolInfo, Tip, Utxo};
+use secp::pedersen::Commitment;
 use util;
 
 /// ApiEndpoint implementation for the blockchain. Exposes the current chain
@@ -43,16 +43,22 @@ pub struct ChainApi {
 
 impl ApiEndpoint for ChainApi {
 	type ID = String;
-	type T = Tip;
+	type T = ();
+	type IDX_T = Tip;
 	type OP_IN = ();
 	type OP_OUT = ();
 
 	fn operations(&self) -> Vec<Operation> {
-		vec![Operation::Get]
+		vec![Operation::Index]
 	}
 
-	fn get(&self, _: String) -> ApiResult<Tip> {
-		self.chain.head().map_err(|e| Error::Internal(format!("{:?}", e)))
+	fn index(&self) -> ApiResult<Self::IDX_T> {
+		println!("***** in chain api index");
+		match self.chain.head() {
+			Ok(tip) => Ok(Tip::from_tip(tip)),
+			Err(e) => Err(Error::Internal(format!("{:?}", e)))
+		}
+		// self.chain.head().map_err(|e| Error::Internal(format!("{:?}", e)))
 	}
 }
 
@@ -63,10 +69,10 @@ pub struct OutputApi {
 	chain: Arc<chain::Chain>,
 }
 
-
 impl ApiEndpoint for OutputApi {
 	type ID = String;
 	type T = Utxo;
+	type IDX_T = Vec<Self::T>;
 	type OP_IN = ();
 	type OP_OUT = ();
 
@@ -74,14 +80,29 @@ impl ApiEndpoint for OutputApi {
 		vec![Operation::Get]
 	}
 
-	fn get(&self, id: String) -> ApiResult<Utxo> {
+	fn get(&self, id: String) -> ApiResult<Self::T> {
 		let c = util::from_hex(id.clone()).map_err(|_| Error::Argument(format!("Not a valid commitment: {}", id)))?;
 
 		// TODO - can probably clean up the error mapping here
-		match self.chain.get_unspent(&Commitment::from_vec(c)) {
-			Ok(utxo) => Ok(Utxo::from_output(utxo)),
+		let commit = Commitment::from_vec(c);
+		match self.chain.get_unspent(&commit) {
+			Ok(out) => {
+				let mut utxo = Utxo::from_output(out);
+				match self.chain.get_block_header_by_output_commit(&commit) {
+					Ok(header) => {
+						utxo.height = header.height;
+						Ok(utxo)
+					},
+					Err(_) => Err(Error::NotFound),
+				}
+			},
 			Err(_) => Err(Error::NotFound),
 		}
+	}
+
+	// TODO - this is just a placeholder demonstrating IDX_T (collection of T for index route)
+	fn index(&self) -> ApiResult<Self::IDX_T> {
+		Ok(vec![])
 	}
 }
 
@@ -92,26 +113,23 @@ pub struct PoolApi<T> {
 	tx_pool: Arc<RwLock<pool::TransactionPool<T>>>,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct PoolInfo {
-	pool_size: usize,
-	orphans_size: usize,
-	total_size: usize,
-}
-
 impl<T> ApiEndpoint for PoolApi<T>
     where T: pool::BlockChain + Clone + Send + Sync + 'static
 {
 	type ID = String;
-	type T = PoolInfo;
+	type T = ();
+	type IDX_T = PoolInfo;
 	type OP_IN = TxWrapper;
 	type OP_OUT = ();
 
 	fn operations(&self) -> Vec<Operation> {
-		vec![Operation::Get, Operation::Custom("push".to_string())]
+		vec![
+			Operation::Index,
+			Operation::Custom("push".to_string())
+		]
 	}
 
-	fn get(&self, _: String) -> ApiResult<PoolInfo> {
+	fn index(&self) -> ApiResult<Self::IDX_T> {
 		let pool = self.tx_pool.read().unwrap();
 		Ok(PoolInfo {
 			pool_size: pool.pool_size(),

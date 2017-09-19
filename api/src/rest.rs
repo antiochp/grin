@@ -91,6 +91,7 @@ pub enum Operation {
 	Delete,
 	Update,
 	Get,
+	Index,
 	Custom(String),
 }
 
@@ -101,6 +102,7 @@ impl Operation {
 			Operation::Delete => Method::Delete,
 			Operation::Update => Method::Put,
 			Operation::Get => Method::Get,
+			Operation::Index => Method::Get,
 			Operation::Custom(_) => Method::Post,
 		}
 	}
@@ -112,6 +114,7 @@ pub type ApiResult<T> = ::std::result::Result<T, Error>;
 /// method corresponds to a specific relative URL and HTTP method following
 /// basic REST principles:
 ///
+/// * index:  GET /
 /// * create: POST /
 /// * get:    GET /:id
 /// * update: PUT /:id
@@ -127,6 +130,7 @@ pub type ApiResult<T> = ::std::result::Result<T, Error>;
 pub trait ApiEndpoint: Clone + Send + Sync + 'static {
 	type ID: ToString + FromStr;
 	type T: Serialize + DeserializeOwned;
+	type IDX_T: Serialize + DeserializeOwned;
 	type OP_IN: Serialize + DeserializeOwned;
 	type OP_OUT: Serialize + DeserializeOwned;
 
@@ -152,6 +156,13 @@ pub trait ApiEndpoint: Clone + Send + Sync + 'static {
 		unimplemented!()
 	}
 
+	/// TODO - index right now returns ApiResult<Self::T>
+	/// for may cases this would need to be a collection, so Vec<_> or something
+	#[allow(unused_variables)]
+	fn index(&self) -> ApiResult<Self::IDX_T> {
+		unimplemented!()
+	}
+
 	#[allow(unused_variables)]
 	fn operation(&self, op: String, input: Self::OP_IN) -> ApiResult<Self::OP_OUT> {
 		unimplemented!()
@@ -169,15 +180,23 @@ impl<E> Handler for ApiWrapper<E>
 	fn handle(&self, req: &mut Request) -> IronResult<Response> {
 		match req.method {
 			Method::Get => {
-				let res = self.0.get(extract_param(req, "id")?)?;
-				let res_json = serde_json::to_string(&res)
-          .map_err(|e| IronError::new(e, status::InternalServerError))?;
-				Ok(Response::with((status::Ok, res_json)))
+				let id: E::ID = extract_param(req, "id")?;
+				if id.to_string() == "" {
+					let res = self.0.index()?;
+					let res_json = serde_json::to_string(&res)
+						.map_err(|e| IronError::new(e, status::InternalServerError))?;
+					Ok(Response::with((status::Ok, res_json)))
+				} else {
+					let res = self.0.get(id)?;
+					let res_json = serde_json::to_string(&res)
+						.map_err(|e| IronError::new(e, status::InternalServerError))?;
+					Ok(Response::with((status::Ok, res_json)))
+				}
 			}
 			Method::Put => {
 				let id = extract_param(req, "id")?;
 				let t: E::T = serde_json::from_reader(req.body.by_ref())
-          .map_err(|e| IronError::new(e, status::BadRequest))?;
+					.map_err(|e| IronError::new(e, status::BadRequest))?;
 				self.0.update(id, t)?;
 				Ok(Response::with(status::NoContent))
 			}
@@ -188,7 +207,7 @@ impl<E> Handler for ApiWrapper<E>
 			}
 			Method::Post => {
 				let t: E::T = serde_json::from_reader(req.body.by_ref())
-          .map_err(|e| IronError::new(e, status::BadRequest))?;
+					.map_err(|e| IronError::new(e, status::BadRequest))?;
 				let id = self.0.create(t)?;
 				Ok(Response::with((status::Created, id.to_string())))
 			}
@@ -291,6 +310,7 @@ impl ApiServer {
 					Operation::Update => root.clone() + "/:id",
 					Operation::Delete => root.clone() + "/:id",
 					Operation::Create => root.clone(),
+					Operation::Index => root.clone(),
 					_ => panic!("unreachable"),
 				};
 				let wrapper = ApiWrapper(endpoint.clone());

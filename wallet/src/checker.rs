@@ -16,7 +16,9 @@
 //! the wallet storage and update them.
 
 use api;
-// use api::Output;
+use core::core::transaction;
+use core::consensus;
+
 use secp::{self, pedersen};
 use util;
 
@@ -28,37 +30,59 @@ use types::{WalletConfig, OutputStatus, WalletData};
 pub fn refresh_outputs(config: &WalletConfig, ext_key: &ExtendedKey) {
 	let secp = secp::Secp256k1::with_caps(secp::ContextFlag::Commit);
 
-	// operate within a lock on wallet data
-	let _ = WalletData::with_wallet(&config.data_file_dir, |wallet_data| {
+	match get_tip(config) {
+		Ok(tip) => {
+			// operate within a lock on wallet data
+			let _ = WalletData::with_wallet(&config.data_file_dir, |wallet_data| {
+				// check each output that's not spent
+				for out in &mut wallet_data.outputs {
+					println!("checking an output");
+					if out.status != OutputStatus::Spent {
+						// figure out the commitment
+						let key = ext_key.derive(&secp, out.n_child).unwrap();
+						let commitment = secp.commit(out.value, key.key).unwrap();
 
-		// check each output that's not spent
-		for out in &mut wallet_data.outputs {
-			println!("checking an output");
-			if out.status != OutputStatus::Spent {
-				// figure out the commitment
-				let key = ext_key.derive(&secp, out.n_child).unwrap();
-				let commitment = secp.commit(out.value, key.key).unwrap();
+						// TODO check the pool for unconfirmed
 
-				// TODO check the pool for unconfirmed
+						let out_res = get_output_by_commitment(config, commitment);
 
-				let out_res = get_output_by_commitment(config, commitment);
-				if out_res.is_ok() {
-					// output is known, it's a new utxo
-					out.status = OutputStatus::Unspent;
-					// out.height = out_res.height;
-
-				} else if out.status == OutputStatus::Unspent {
-					// a UTXO we can't find anymore has been spent
-					if let Err(api::Error::NotFound) = out_res {
-						out.status = OutputStatus::Spent;
+						match out_res {
+							Ok(utxo) => {
+								// output is known, it's a new utxo
+								if utxo.features.contains(transaction::COINBASE_OUTPUT) {
+									println!("coinbase *** {}, {}, {}", utxo.height, tip.height, consensus::COINBASE_MATURITY);
+									let is_mature = tip.height >= (utxo.height + consensus::COINBASE_MATURITY);
+									if is_mature {
+										out.status = OutputStatus::Unspent;
+									} else {
+										out.status = OutputStatus::Immature;
+									}
+								} else {
+									out.status = OutputStatus::Unspent;
+								}
+								out.height = utxo.height;
+							},
+							Err(api::Error::NotFound) => {
+								if out.status == OutputStatus::Unspent {
+									out.status = OutputStatus::Spent;
+								}
+							},
+							Err(_) => {
+								//TODO find error with connection and return
+								//error!("Error contacting server node at {}. Is it running?", config.check_node_api_http_addr);
+							}
+						}
 					}
-				} else {
-					//TODO find error with connection and return
-					//error!("Error contacting server node at {}. Is it running?", config.check_node_api_http_addr);
 				}
-			}
-		}
-	});
+			});
+		},
+		Err(_) => {}
+	}
+}
+
+fn get_tip(config: &WalletConfig) -> Result<api::Tip, api::Error> {
+	let url = format!("{}/v1/chain", config.check_node_api_http_addr);
+	api::client::get::<api::Tip>(url.as_str())
 }
 
 // queries a reachable node for a given output, checking whether it's been
