@@ -43,9 +43,7 @@ pub fn start_rest_apis<T>(
 )
 	where T: pool::BlockChain + Clone + Send + Sync + 'static
 {
-	thread::spawn(move || {
-		_start_rest_apis(addr, chain, tx_pool)
-	});
+	thread::spawn(move || { _start_rest_apis(addr, chain, tx_pool) });
 }
 
 fn _start_rest_apis<T>(
@@ -61,8 +59,6 @@ fn _start_rest_apis<T>(
 		// pool: get "/v2/pool" => pool_handler,
 		// push: post "v2/pool/push" => push_handler,
 	);
-
-	// println!("{:?}", router);
-
+	
 	Iron::new(router).http(addr).unwrap();
 }
