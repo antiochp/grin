@@ -20,8 +20,11 @@ use chain;
 use core::core;
 use core::ser;
 use pool;
+use util;
 
-use types::Error;
+use types::{Error, Tip, Utxo};
+use secp::pedersen::Commitment;
+
 
 use iron::prelude::*;
 use iron::Handler;
@@ -37,12 +40,13 @@ pub struct ChainHandler {
 
 impl Handler for ChainHandler {
 	fn handle(&self, req: &mut Request) -> IronResult<Response> {
-		println!("***** in v2 chain_handle handle");
 		let content_type = mime!(Application/Json);
 
+		println!("***** in v2 chain_handle handle");
+
 		match self.chain.head() {
-			Ok(tip) => {
-				let json = serde_json::to_string(&tip)
+			Ok(head) => {
+				let json = serde_json::to_string(&head)
 					.map_err(|e| IronError::new(e, status::InternalServerError))?;
 				Ok(Response::with((content_type, status::Ok, json)))
 			},
@@ -61,9 +65,31 @@ pub struct UtxoHandler {
 
 impl Handler for UtxoHandler {
 	fn handle(&self, req: &mut Request) -> IronResult<Response> {
-		println!("foofoofoo");
-		let ref id = req.extensions.get::<Router>().unwrap().find("id").unwrap_or("/");
-		println!("utxo handler, id - {:?}", id);
-		Ok(Response::with((status::Ok, *id)))
+		let content_type = mime!(Application/Json);
+
+		println!("*** in v2 utxo handler");
+
+		let id = req.extensions.get::<Router>().unwrap().find("id").unwrap_or("/");
+		let c = util::from_hex(String::from(id)).map_err(|_|
+			Error::Argument(format!("Not a valid commitment: {}", id)))?;
+
+		// TODO - can probably clean up the error mapping here
+		let commit = Commitment::from_vec(c);
+		match self.chain.get_unspent(&commit) {
+			Ok(out) => {
+				let mut utxo = Utxo::from_output(out);
+				match self.chain.get_block_header_by_output_commit(&commit) {
+					Ok(header) => {
+						utxo.height = header.height;
+						let json = serde_json::to_string(&utxo)
+							.map_err(|e| IronError::new(e, status::InternalServerError))?;
+						Ok(Response::with((content_type, status::Ok, json)))
+					},
+					Err(_) => Err(IronError::from(Error::NotFound)),
+				}
+			},
+			Err(_) => Err(IronError::from(Error::NotFound)),
+		}
+
 	}
 }
