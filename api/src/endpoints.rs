@@ -113,7 +113,7 @@ pub struct PoolApi<T> {
 }
 
 impl<T> ApiEndpoint for PoolApi<T>
-    where T: pool::BlockChain + Clone + Send + Sync + 'static
+	where T: pool::BlockChain + Clone + Send + Sync + 'static
 {
 	type ID = String;
 	type T = ();

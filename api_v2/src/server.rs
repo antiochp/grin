@@ -56,9 +56,9 @@ fn _start_rest_apis<T>(
 	let router = router!(
 		chain: get "/v2/chain" => ChainHandler{chain: chain.clone()},
 		utxo: get "/v2/chain/utxo/:id" => UtxoHandler{chain: chain.clone()},
-		// pool: get "/v2/pool" => pool_handler,
+		pool: get "/v2/pool" => PoolInfoHandler{tx_pool: tx_pool.clone()},
 		// push: post "v2/pool/push" => push_handler,
 	);
-	
+
 	Iron::new(router).http(addr).unwrap();
 }

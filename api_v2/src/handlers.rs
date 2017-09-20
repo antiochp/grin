@@ -22,7 +22,7 @@ use core::ser;
 use pool;
 use util;
 
-use types::{Error, Tip, Utxo};
+use types::*;
 use secp::pedersen::Commitment;
 
 
@@ -52,6 +52,37 @@ impl Handler for ChainHandler {
 			},
 			Err(e) => {
 				// TODO - can we avoid wrapping an error in an error and wrapping it in an IronError?
+				let error = Error::Internal(format!("{:?}", e));
+				Err(IronError::new(error, status::BadRequest))
+			}
+		}
+	}
+}
+
+pub struct PoolInfoHandler<T> {
+	pub tx_pool: Arc<RwLock<pool::TransactionPool<T>>>,
+}
+
+impl<T> Handler for PoolInfoHandler<T>
+	where T: pool::BlockChain + Clone + Send + Sync + 'static
+{
+	fn handle(&self, req: &mut Request) -> IronResult<Response> {
+		let content_type = mime!(Application/Json);
+
+		println!("*** in v2 pool info handler");
+
+		match self.tx_pool.read() {
+			Ok(pool) => {
+				let pool_info = PoolInfo {
+					pool_size: pool.pool_size(),
+					orphans_size: pool.orphans_size(),
+					total_size: pool.total_size(),
+				};
+				let json = serde_json::to_string(&pool_info)
+					.map_err(|e| IronError::new(e, status::InternalServerError))?;
+				Ok(Response::with((content_type, status::Ok, json)))
+			},
+			Err(e) => {
 				let error = Error::Internal(format!("{:?}", e));
 				Err(IronError::new(error, status::BadRequest))
 			}
