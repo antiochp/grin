@@ -109,3 +109,9 @@ pub struct PoolInfo {
 	/// Total size of pool + orphans
 	pub total_size: usize,
 }
+
+/// Dummy wrapper for the hex-encoded serialized transaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TxWrapper {
+	pub tx_hex: String,
+}

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 extern crate router;
+extern crate bodyparser;
 
 use std::sync::{Arc, RwLock};
 
@@ -59,6 +60,58 @@ impl Handler for ChainHandler {
 	}
 }
 
+pub struct PoolPushHandler<T> {
+	pub tx_pool: Arc<RwLock<pool::TransactionPool<T>>>,
+}
+
+impl<T> Handler for PoolPushHandler<T>
+	where T: pool::BlockChain + Clone + Send + Sync + 'static
+{
+	fn handle(&self, req: &mut Request) -> IronResult<Response> {
+		let content_type = mime!(Application/Json);
+
+		println!("*** in v2 pool push handler");
+
+		let tx_wrap = req.get::<bodyparser::Struct<TxWrapper>>().
+			map_err(|_| {
+				Error::Argument(format!("Invalid json in body."))
+			})?.unwrap();
+
+		// TODO - cleanup the unwrap above
+
+		let tx_bin = util::from_hex(tx_wrap.tx_hex).
+			map_err(|_| {
+				Error::Argument(format!("Invalid hex in transaction wrapper."))
+			})?;
+
+		let tx: core::Transaction = ser::deserialize(&mut &tx_bin[..]).
+			map_err(|_| {
+				Error::Argument(format!("Could not deserialize transaction, invalid format."))
+			})?;
+
+		let source = pool::TxSource {
+			debug_name: "push-api".to_string(),
+			identifier: "?.?.?.?".to_string(),
+		};
+
+		debug!(
+			"Pushing transaction with {} inputs and {} outputs to pool.",
+			tx.inputs.len(),
+			tx.outputs.len()
+		);
+
+		self.tx_pool
+			.write()
+			.unwrap()
+			.add_to_memory_pool(source, tx)
+			.map_err(|e| {
+				Error::Internal(format!("Addition to transaction pool failed: {:?}", e))
+			})?;
+
+		Ok(Response::with((content_type, status::Ok, "{}")))
+	}
+}
+
 pub struct PoolInfoHandler<T> {
 	pub tx_pool: Arc<RwLock<pool::TransactionPool<T>>>,
 }
@@ -101,6 +154,8 @@ impl Handler for UtxoHandler {
 		println!("*** in v2 utxo handler");
 
 		let id = req.extensions.get::<Router>().unwrap().find("id").unwrap_or("/");
+		// let ids = comma seprated list of ids from query param
+
 		let c = util::from_hex(String::from(id)).map_err(|_|
 			Error::Argument(format!("Not a valid commitment: {}", id)))?;
 
@@ -121,6 +176,5 @@ impl Handler for UtxoHandler {
 			},
 			Err(_) => Err(IronError::from(Error::NotFound)),
 		}
-
 	}
 }

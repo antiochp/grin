@@ -122,13 +122,13 @@ impl Server {
 
 		info!("Starting rest apis at: {}", &config.api_http_addr);
 
-		api::start_rest_apis(config.api_http_addr.clone(),
-		                     shared_chain.clone(),
-		                     tx_pool.clone());
-
-		info!("Starting v2 rest apis at: 127.0.0.1:13412 (hardcoded)");
+		// api::start_rest_apis(config.api_http_addr.clone(),
+		//                      shared_chain.clone(),
+		//                      tx_pool.clone());
+		//
+		
 		api_v2::start_rest_apis(
-			String::from("127.0.0.1:13412"),
+			config.api_http_addr.clone(),
 			shared_chain.clone(),
 			tx_pool.clone()
 		);

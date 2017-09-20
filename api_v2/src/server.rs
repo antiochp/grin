@@ -54,10 +54,11 @@ fn _start_rest_apis<T>(
 	where T: pool::BlockChain + Clone + Send + Sync + 'static
 {
 	let router = router!(
-		chain: get "/v2/chain" => ChainHandler{chain: chain.clone()},
-		utxo: get "/v2/chain/utxo/:id" => UtxoHandler{chain: chain.clone()},
-		pool: get "/v2/pool" => PoolInfoHandler{tx_pool: tx_pool.clone()},
-		// push: post "v2/pool/push" => push_handler,
+		chain_index: get "/v1/chain" => ChainHandler{chain: chain.clone()},
+		utxo_index: get "/v1/chain/utxo" => UtxoHandler{chain: chain.clone()},
+		utxo_get: get "/v1/chain/utxo/:id" => UtxoHandler{chain: chain.clone()},
+		pool_index: get "/v1/pool" => PoolInfoHandler{tx_pool: tx_pool.clone()},
+		pool_push: post "/v1/pool/push" => PoolPushHandler{tx_pool: tx_pool.clone()},
 	);
 
 	Iron::new(router).http(addr).unwrap();
