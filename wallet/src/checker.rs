@@ -36,7 +36,6 @@ pub fn refresh_outputs(config: &WalletConfig, ext_key: &ExtendedKey) {
 			let _ = WalletData::with_wallet(&config.data_file_dir, |wallet_data| {
 				// check each output that's not spent
 				for out in &mut wallet_data.outputs {
-					println!("checking an output");
 					if out.status != OutputStatus::Spent {
 						// figure out the commitment
 						let key = ext_key.derive(&secp, out.n_child).unwrap();
@@ -50,7 +49,6 @@ pub fn refresh_outputs(config: &WalletConfig, ext_key: &ExtendedKey) {
 							Ok(utxo) => {
 								// output is known, it's a new utxo
 								if utxo.features.contains(transaction::COINBASE_OUTPUT) {
-									println!("coinbase *** {}, {}, {}", utxo.height, tip.height, consensus::COINBASE_MATURITY);
 									let is_mature = tip.height >= (utxo.height + consensus::COINBASE_MATURITY);
 									if is_mature {
 										out.status = OutputStatus::Unspent;
@@ -81,8 +79,11 @@ pub fn refresh_outputs(config: &WalletConfig, ext_key: &ExtendedKey) {
 }
 
 fn get_tip(config: &WalletConfig) -> Result<api::Tip, api::Error> {
-	let url = format!("{}/v1/chain", config.check_node_api_http_addr);
-	api::client::get::<api::Tip>(url.as_str())
+	// let url = format!("{}/v1/chain", config.check_node_api_http_addr);
+	let url = format!("{}/v2/chain", "http://127.0.0.1:13412");
+	let result = api::client::get::<api::Tip>(url.as_str());
+	println!("result here - {:?}", result);
+	result
 }
 
 // queries a reachable node for a given output, checking whether it's been

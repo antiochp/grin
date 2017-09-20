@@ -58,7 +58,6 @@ impl ApiEndpoint for ChainApi {
 			Ok(tip) => Ok(Tip::from_tip(tip)),
 			Err(e) => Err(Error::Internal(format!("{:?}", e)))
 		}
-		// self.chain.head().map_err(|e| Error::Internal(format!("{:?}", e)))
 	}
 }
 

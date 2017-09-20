@@ -27,6 +27,7 @@ use tokio_timer::Timer;
 
 use adapters::*;
 use api;
+use api_v2;
 use chain;
 use miner;
 use p2p;
@@ -92,7 +93,7 @@ impl Server {
 		                                               chain_adapter.clone(),
 		                                               genesis_block,
 		                                               pow::verify_size)?);
-			
+
 		pool_adapter.set_chain(shared_chain.clone());
 
 		let peer_store = Arc::new(p2p::PeerStore::new(config.db_root.clone())?);
@@ -124,6 +125,13 @@ impl Server {
 		api::start_rest_apis(config.api_http_addr.clone(),
 		                     shared_chain.clone(),
 		                     tx_pool.clone());
+
+		info!("Starting v2 rest apis at: 127.0.0.1:13412 (hardcoded)");
+		api_v2::start_rest_apis(
+			String::from("127.0.0.1:13412"),
+			shared_chain.clone(),
+			tx_pool.clone()
+		);
 
 		warn!("Grin server started.");
 		Ok(Server {
