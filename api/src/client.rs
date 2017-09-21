@@ -20,7 +20,7 @@ use hyper::status::{StatusClass, StatusCode};
 use serde::{Serialize, Deserialize};
 use serde_json;
 
-use rest::Error;
+use types::Error;
 
 /// Helper function to easily issue a HTTP GET request against a given URL that
 /// returns a JSON object. Handles request building, JSON deserialization and

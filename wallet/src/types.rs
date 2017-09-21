@@ -18,9 +18,11 @@ use std::io::Write;
 use std::num;
 use std::path::Path;
 use std::path::MAIN_SEPARATOR;
+use std::{error, fmt};
 
 use serde_json;
 
+use iron::{IronError, status};
 use secp;
 use secp::key::SecretKey;
 
@@ -29,6 +31,7 @@ use core::core::Transaction;
 use core::ser;
 use extkey;
 use util;
+
 
 const DAT_FILE: &'static str = "wallet.dat";
 const LOCK_FILE: &'static str = "wallet.lock";
@@ -44,6 +47,24 @@ pub enum Error {
 	Format(String),
 	/// Error when contacting a node through its API
 	Node(api::Error),
+}
+
+impl fmt::Display for Error {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match *self {
+			Error::Format(ref s) => write!(f, "Bad arguments: {}", s),
+			_ => write!(f, "*** some generic error formatting - fix me ***"),
+		}
+	}
+}
+
+impl error::Error for Error {
+	fn description(&self) -> &str {
+		match *self {
+			Error::Format(_) => "Bad arguments.",
+			_ => "*** some generci error formatting - fix me ***"
+		}
+	}
 }
 
 impl From<secp::Error> for Error {
@@ -76,6 +97,16 @@ impl From<api::Error> for Error {
 	}
 }
 
+// TODO - fix up error mappings for Iron
+impl From<Error> for IronError {
+	fn from(e: Error) -> IronError {
+		match e {
+			Error::Format(_) => IronError::new(e, status::Status::BadRequest),
+			e => IronError::new(e, status::Status::BadRequest),
+		}
+	}
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
 	//Whether to run a wallet
@@ -94,7 +125,7 @@ impl Default for WalletConfig {
 		WalletConfig {
 			enable_wallet: false,
 			api_http_addr: "127.0.0.1:13416".to_string(),
-			check_node_api_http_addr: "http://127.0.0.1:13415".to_string(),
+			check_node_api_http_addr: "http://127.0.0.1:13413".to_string(),
 			data_file_dir: ".".to_string(),
 		}
 	}
@@ -108,6 +139,7 @@ impl Default for WalletConfig {
 pub enum OutputStatus {
 	Unconfirmed,
 	Unspent,
+	Immature,
 	Locked,
 	Spent,
 }
@@ -118,13 +150,15 @@ pub enum OutputStatus {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct OutputData {
 	/// Private key fingerprint (in case the wallet tracks multiple)
-	pub fingerprint: [u8; 4],
+	pub fingerprint: extkey::Fingerprint,
 	/// How many derivations down from the root key
 	pub n_child: u32,
 	/// Value of the output, necessary to rebuild the commitment
 	pub value: u64,
 	/// Current status of the output
 	pub status: OutputStatus,
+	/// Height of the output
+	pub height: u64,
 }
 
 impl OutputData {
@@ -222,13 +256,13 @@ impl WalletData {
 	/// Select a subset of unspent outputs to spend in a transaction
 	/// transferring
 	/// the provided amount.
-	pub fn select(&self, fingerprint: [u8; 4], amount: u64) -> (Vec<OutputData>, i64) {
+	pub fn select(&self, fingerprint: &extkey::Fingerprint, amount: u64) -> (Vec<OutputData>, i64) {
 		let mut to_spend = vec![];
 		let mut input_total = 0;
 		// TODO very naive impl for now, there's definitely better coin selection
 		// algos available
 		for out in &self.outputs {
-			if out.status == OutputStatus::Unspent && out.fingerprint == fingerprint {
+			if out.status == OutputStatus::Unspent && out.fingerprint == *fingerprint {
 				to_spend.push(out.clone());
 				input_total += out.value;
 				if input_total >= amount {
@@ -240,10 +274,10 @@ impl WalletData {
 	}
 
 	/// Next child index when we want to create a new output.
-	pub fn next_child(&self, fingerprint: [u8; 4]) -> u32 {
+	pub fn next_child(&self, fingerprint: &extkey::Fingerprint) -> u32 {
 		let mut max_n = 0;
 		for out in &self.outputs {
-			if max_n < out.n_child && out.fingerprint == fingerprint {
+			if max_n < out.n_child && out.fingerprint == *fingerprint {
 				max_n = out.n_child;
 			}
 		}
@@ -254,10 +288,15 @@ impl WalletData {
 /// Helper in serializing the information a receiver requires to build a
 /// transaction.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-struct JSONPartialTx {
-	amount: u64,
-	blind_sum: String,
-	tx: String,
+pub struct JSONPartialTx {
+	pub amount: u64,
+	pub blind_sum: String,
+	pub tx: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct CoinbaseTx {
+	pub amount: u64,
 }
 
 /// Encodes the information for a partial transaction (not yet completed by the
@@ -269,23 +308,6 @@ pub fn partial_tx_to_json(receive_amount: u64, blind_sum: SecretKey, tx: Transac
 		tx: util::to_hex(ser::ser_vec(&tx).unwrap()),
 	};
 	serde_json::to_string_pretty(&partial_tx).unwrap()
-}
-
-/// Reads a partial transaction encoded as JSON into the amount, sum of blinding
-/// factors and the transaction itself.
-pub fn partial_tx_from_json(json_str: &str) -> Result<(u64, SecretKey, Transaction), Error> {
-	let partial_tx: JSONPartialTx = serde_json::from_str(json_str)?;
-
-	let secp = secp::Secp256k1::with_caps(secp::ContextFlag::Commit);
-	let blind_bin = util::from_hex(partial_tx.blind_sum)?;
-	let blinding = SecretKey::from_slice(&secp, &blind_bin[..])?;
-	let tx_bin = util::from_hex(partial_tx.tx)?;
-	let tx =
-		ser::deserialize(&mut &tx_bin[..]).map_err(|_| {
-				Error::Format("Could not deserialize transaction, invalid format.".to_string())
-			})?;
-
-	Ok((partial_tx.amount, blinding, tx))
 }
 
 /// Amount in request to build a coinbase output.

@@ -92,7 +92,7 @@ impl Server {
 		                                               chain_adapter.clone(),
 		                                               genesis_block,
 		                                               pow::verify_size)?);
-			
+
 		pool_adapter.set_chain(shared_chain.clone());
 
 		let peer_store = Arc::new(p2p::PeerStore::new(config.db_root.clone())?);
@@ -121,9 +121,11 @@ impl Server {
 
 		info!("Starting rest apis at: {}", &config.api_http_addr);
 
-		api::start_rest_apis(config.api_http_addr.clone(),
-		                     shared_chain.clone(),
-		                     tx_pool.clone());
+		api::start_rest_apis(
+			config.api_http_addr.clone(),
+			shared_chain.clone(),
+			tx_pool.clone()
+		);
 
 		warn!("Grin server started.");
 		Ok(Server {

@@ -144,7 +144,7 @@ impl Miner {
 	}
 
 	/// Inner part of the mining loop for cuckoo-miner asynch mode
-	pub fn inner_loop_async(&self, 
+	pub fn inner_loop_async(&self,
 	                        plugin_miner:&mut PluginMiner,
 	                        difficulty:Difficulty,
 	                        b:&mut Block,
@@ -209,7 +209,7 @@ impl Miner {
 							last_solution_time_secs, 3, last_hashes_per_sec,
 							s.iterations_completed);
 					}
-				} 
+				}
 				next_stat_output = time::get_time().sec + stat_output_interval;
 			}
 		}
