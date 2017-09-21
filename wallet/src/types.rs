@@ -310,23 +310,6 @@ pub fn partial_tx_to_json(receive_amount: u64, blind_sum: SecretKey, tx: Transac
 	serde_json::to_string_pretty(&partial_tx).unwrap()
 }
 
-// /// Reads a partial transaction encoded as JSON into the amount, sum of blinding
-// /// factors and the transaction itself.
-// pub fn partial_tx_from_json(json_str: &str) -> Result<(u64, SecretKey, Transaction), Error> {
-// 	let partial_tx: JSONPartialTx = serde_json::from_str(json_str)?;
-//
-// 	let secp = secp::Secp256k1::with_caps(secp::ContextFlag::Commit);
-// 	let blind_bin = util::from_hex(partial_tx.blind_sum)?;
-// 	let blinding = SecretKey::from_slice(&secp, &blind_bin[..])?;
-// 	let tx_bin = util::from_hex(partial_tx.tx)?;
-// 	let tx =
-// 		ser::deserialize(&mut &tx_bin[..]).map_err(|_| {
-// 				Error::Format("Could not deserialize transaction, invalid format.".to_string())
-// 			})?;
-//
-// 	Ok((partial_tx.amount, blinding, tx))
-// }
-
 /// Amount in request to build a coinbase output.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum WalletReceiveRequest {
