@@ -5,11 +5,10 @@ authors = ["Ignotus Peverell <igno.peverell@protonmail.com>"]
 exclude = ["**/*.grin", "**/*.grin2"]
 
 [workspace]
-members = ["api", "api_v2", "chain", "config", "core", "grin", "p2p", "store", "util", "pool", "wallet"]
+members = ["api", "chain", "config", "core", "grin", "p2p", "store", "util", "pool", "wallet"]
 
 [dependencies]
 grin_api = { path = "./api" }
-grin_api_v2 = { path = "./api_v2" }
 grin_wallet = { path = "./wallet" }
 grin_grin = { path = "./grin" }
 grin_config = { path = "./config" }

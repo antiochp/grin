@@ -27,7 +27,6 @@ use tokio_timer::Timer;
 
 use adapters::*;
 use api;
-use api_v2;
 use chain;
 use miner;
 use p2p;
@@ -122,12 +121,7 @@ impl Server {
 
 		info!("Starting rest apis at: {}", &config.api_http_addr);
 
-		// api::start_rest_apis(config.api_http_addr.clone(),
-		//                      shared_chain.clone(),
-		//                      tx_pool.clone());
-		//
-		
-		api_v2::start_rest_apis(
+		api::start_rest_apis(
 			config.api_http_addr.clone(),
 			shared_chain.clone(),
 			tx_pool.clone()

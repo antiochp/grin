@@ -29,15 +29,23 @@ extern crate grin_core as core;
 extern crate grin_util as util;
 extern crate secp256k1zkp as secp;
 
+#[macro_use]
+extern crate hyper;
+extern crate iron;
+#[macro_use]
+extern crate router;
+extern crate bodyparser;
+
 mod checker;
 mod extkey;
 mod info;
-mod receiver;
 mod sender;
 mod types;
+mod handlers;
+pub mod server;
 
 pub use extkey::ExtendedKey;
 pub use info::info;
-pub use receiver::{WalletReceiver, receive_json_tx};
 pub use sender::issue_send_tx;
 pub use types::{WalletConfig, WalletReceiveRequest, CbAmount, CbData};
+pub use handlers::receive_json_tx_from_str;

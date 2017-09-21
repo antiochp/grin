@@ -6,7 +6,6 @@ workspace = ".."
 
 [dependencies]
 grin_api = { path = "../api" }
-grin_api_v2 = { path = "../api_v2" }
 grin_chain = { path = "../chain" }
 grin_core = { path = "../core" }
 grin_store = { path = "../store" }

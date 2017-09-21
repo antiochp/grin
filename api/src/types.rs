@@ -15,6 +15,46 @@
 use core::core;
 use chain;
 use secp::pedersen;
+use std::{error, fmt};
+
+use iron::{IronError, status};
+
+#[derive(Debug)]
+pub enum Error {
+	Internal(String),
+	Argument(String),
+	NotFound,
+}
+
+impl fmt::Display for Error {
+	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+		match *self {
+			Error::Argument(ref s) => write!(f, "Bad arguments: {}", s),
+			Error::Internal(ref s) => write!(f, "Internal error: {}", s),
+			Error::NotFound => write!(f, "Not found."),
+		}
+	}
+}
+
+impl error::Error for Error {
+	fn description(&self) -> &str {
+		match *self {
+			Error::Argument(_) => "Bad arguments.",
+			Error::Internal(_) => "Internal error.",
+			Error::NotFound => "Not found.",
+		}
+	}
+}
+
+impl From<Error> for IronError {
+	fn from(e: Error) -> IronError {
+		match e {
+			Error::Argument(_) => IronError::new(e, status::Status::BadRequest),
+			Error::Internal(_) => IronError::new(e, status::Status::InternalServerError),
+			Error::NotFound => IronError::new(e, status::Status::NotFound),
+		}
+	}
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Tip {
@@ -67,4 +107,10 @@ pub struct PoolInfo {
 	pub orphans_size: usize,
 	/// Total size of pool + orphans
 	pub total_size: usize,
+}
+
+/// Dummy wrapper for the hex-encoded serialized transaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TxWrapper {
+	pub tx_hex: String,
 }

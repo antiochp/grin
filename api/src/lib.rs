@@ -1,4 +1,4 @@
-// Copyright 2016 The Grin Developers
+// Copyright 2017 The Grin Developers
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,10 +19,12 @@ extern crate grin_store as store;
 extern crate grin_util as util;
 extern crate secp256k1zkp as secp;
 
+#[macro_use]
 extern crate hyper;
 #[macro_use]
 extern crate log;
 extern crate iron;
+#[macro_use]
 extern crate router;
 extern crate serde;
 #[macro_use]
@@ -30,10 +32,9 @@ extern crate serde_derive;
 extern crate serde_json;
 
 pub mod client;
-mod endpoints;
-mod rest;
+mod server;
 mod types;
+mod handlers;
 
-pub use endpoints::start_rest_apis;
+pub use server::start_rest_apis;
 pub use types::*;
-pub use rest::*;

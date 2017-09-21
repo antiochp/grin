@@ -37,7 +37,6 @@ extern crate tokio_timer;
 extern crate itertools;
 
 extern crate grin_api as api;
-extern crate grin_api_v2 as api_v2;
 extern crate grin_chain as chain;
 #[macro_use]
 extern crate grin_core as core;
