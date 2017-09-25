@@ -35,6 +35,7 @@ use pow::MiningWorker;
 use pow::types::MinerConfig;
 use core::ser;
 use core::ser::{AsFixedBytes};
+use types::Error;
 
 //use core::genesis;
 
@@ -144,7 +145,7 @@ impl Miner {
 	}
 
 	/// Inner part of the mining loop for cuckoo-miner asynch mode
-	pub fn inner_loop_async(&self, 
+	pub fn inner_loop_async(&self,
 	                        plugin_miner:&mut PluginMiner,
 	                        difficulty:Difficulty,
 	                        b:&mut Block,
@@ -209,7 +210,7 @@ impl Miner {
 							last_solution_time_secs, 3, last_hashes_per_sec,
 							s.iterations_completed);
 					}
-				} 
+				}
 				next_stat_output = time::get_time().sec + stat_output_interval;
 			}
 		}
@@ -368,10 +369,11 @@ impl Miner {
 
 	/// Builds a new block with the chain head as previous and eligible
 	/// transactions from the pool.
-	fn build_block(&self,
-	               head: &core::BlockHeader,
-	               coinbase: (core::Output, core::TxKernel))
-	               -> core::Block {
+	fn build_block(
+		&self,
+		head: &core::BlockHeader,
+		coinbase: (core::Output, core::TxKernel)
+	) -> core::Block {
 		let mut now_sec = time::get_time().sec;
 		let head_sec = head.timestamp.to_timespec().sec;
 		if now_sec == head_sec {
@@ -384,8 +386,9 @@ impl Miner {
 		let txs_box = self.tx_pool.read().unwrap().prepare_mineable_transactions(MAX_TX);
 		let txs = txs_box.iter().map(|tx| tx.as_ref()).collect();
 		let (output, kernel) = coinbase;
+
 		let mut b = core::Block::with_reward(head, txs, output, kernel).unwrap();
-		debug!("(Server ID: {}) Built new block with {} inputs and {} outputs, difficulty: {}",
+		debug!("(Server ID: {}) Built potential block with {} inputs and {} outputs, difficulty: {}",
 				self.debug_output_id,
 				b.inputs.len(),
 				b.outputs.len(),
@@ -402,26 +405,32 @@ impl Miner {
 		b
 	}
 
-	fn get_coinbase(&self) -> (core::Output, core::TxKernel) {
-		if self.config.burn_reward {
-			let mut rng = rand::OsRng::new().unwrap();
-			let secp_inst = secp::Secp256k1::with_caps(secp::ContextFlag::Commit);
-			let skey = secp::key::SecretKey::new(&secp_inst, &mut rng);
-			core::Block::reward_output(skey, &secp_inst).unwrap()
-		} else {
-			let url = format!("{}/v1/receive/coinbase",
-			 					self.config.wallet_receiver_url.as_str());
-			let request = WalletReceiveRequest::Coinbase(CbAmount{amount: consensus::REWARD});
-			let res: CbData = api::client::post(url.as_str(),
-			                                    &request)
-				.expect(format!("(Server ID: {}) Wallet receiver unreachable, could not claim reward. Is it running?",
-				self.debug_output_id.as_str()).as_str());
-			let out_bin = util::from_hex(res.output).unwrap();
-			let kern_bin = util::from_hex(res.kernel).unwrap();
-			let output = ser::deserialize(&mut &out_bin[..]).unwrap();
-			let kernel = ser::deserialize(&mut &kern_bin[..]).unwrap();
+	/// Generate a coinbase output using a one time throw-away secret key.
+	/// Avoids dependency on a running wallet if we don't actually care about the reward.
+	fn burn_output(&self) -> Result<(core::Output, core::TxKernel), Error> {
+		let mut rng = rand::OsRng::new().unwrap();
+		let secp_inst = secp::Secp256k1::with_caps(secp::ContextFlag::Commit);
+		let skey = secp::key::SecretKey::new(&secp_inst, &mut rng);
+		core::Block::reward_output(skey, &secp_inst).map_err(|e| Error::Secp(e))
+	}
 
-			(output, kernel)
-		}
+	fn get_coinbase(&self) -> (core::Output, core::TxKernel) {
+		if self.config.burn_reward { return self.burn_output().unwrap(); }
+
+		let url = format!(
+			"{}/v1/receive/coinbase",
+			self.config.wallet_receiver_url.as_str()
+		);
+
+		let request = WalletReceiveRequest::Coinbase(CbAmount{amount: consensus::REWARD});
+		let res: CbData = api::client::post(url.as_str(), &request)
+			.expect(format!("(Server ID: {}) Wallet receiver unreachable, could not claim reward. Is it running?",
+				self.debug_output_id.as_str()).as_str());
+		let out_bin = util::from_hex(res.output).unwrap();
+		let kern_bin = util::from_hex(res.kernel).unwrap();
+		let output = ser::deserialize(&mut &out_bin[..]).unwrap();
+		let kernel = ser::deserialize(&mut &kern_bin[..]).unwrap();
+
+		(output, kernel)
 	}
 }
