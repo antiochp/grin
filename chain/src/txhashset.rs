@@ -36,7 +36,8 @@ use grin_store;
 use grin_store::pmmr::PMMRBackend;
 use grin_store::types::prune_noop;
 use types::{BlockMarker, BlockSums, ChainStore, Error, TxHashSetRoots};
-use util::{secp_static, zip, LOGGER};
+use util::zip;
+use util::LOGGER;
 
 const TXHASHSET_SUBDIR: &'static str = "txhashset";
 const OUTPUT_SUBDIR: &'static str = "output";
@@ -720,7 +721,7 @@ impl<'a> Extension<'a> {
 		}
 	}
 
-	/// Current root hashes and sums (if applicable) for the Output, range proof
+	/// Current root hashes and for the output, rangeproof
 	/// and kernel sum trees.
 	pub fn roots(&self) -> TxHashSetRoots {
 		TxHashSetRoots {
@@ -740,9 +741,13 @@ impl<'a> Extension<'a> {
 		}
 
 		let roots = self.roots();
-		if roots.output_root != header.output_root || roots.rproof_root != header.range_proof_root
-			|| roots.kernel_root != header.kernel_root
-		{
+		if roots.output_root != header.output_root {
+			return Err(Error::InvalidRoot);
+		}
+		if roots.rproof_root != header.rproof_root {
+			return Err(Error::InvalidRoot);
+		}
+		if roots.kernel_root != header.kernel_root {
 			return Err(Error::InvalidRoot);
 		}
 		Ok(())
@@ -773,19 +778,19 @@ impl<'a> Extension<'a> {
 
 	/// The real magicking: the sum of all kernel excess should equal the sum
 	/// of all output commitments, minus the total supply.
-	pub fn validate_sums(&self, header: &BlockHeader) -> Result<((Commitment, Commitment)), Error> {
+	pub fn validate_sums(&self, header: &BlockHeader) -> Result<BlockSums, Error> {
 		let now = Instant::now();
 
 		// Treat the total "supply" as one huge overage that needs to be accounted for.
 		// If we have a supply of 6,000 grin then we should
 		// have a corresponding 6,000 grin in unspent outputs.
 		let supply = ((header.height * REWARD) as i64).checked_neg().unwrap_or(0);
-		let output_sum = self.sum_commitments(supply, None)?;
+		let utxo_sum = self.sum_commitments(supply, None)?;
 
 		let (kernel_sum, kernel_sum_plus_offset) =
 			self.sum_kernel_excesses(&header.total_kernel_offset, None)?;
 
-		if output_sum != kernel_sum_plus_offset {
+		if utxo_sum != kernel_sum_plus_offset {
 			return Err(Error::InvalidTxHashSet(
 				"Differing Output commitment and kernel excess sums.".to_owned(),
 			));
@@ -797,7 +802,10 @@ impl<'a> Extension<'a> {
 			now.elapsed().as_secs(),
 		);
 
-		Ok((output_sum, kernel_sum))
+		Ok(BlockSums {
+			utxo_sum,
+			kernel_sum,
+		})
 	}
 
 	/// Validate the txhashset state against the provided block header.
@@ -805,45 +813,29 @@ impl<'a> Extension<'a> {
 		&mut self,
 		header: &BlockHeader,
 		skip_rproofs: bool,
-	) -> Result<((Commitment, Commitment)), Error> {
+	) -> Result<BlockSums, Error> {
 		self.validate_mmrs()?;
 		self.validate_roots(header)?;
 
 		if header.height == 0 {
-			let zero_commit = secp_static::commit_to_zero_value();
-			return Ok((zero_commit.clone(), zero_commit.clone()));
+			return Ok(BlockSums::default());
 		}
 
-		let (output_sum, kernel_sum) = self.validate_sums(header)?;
+		// Now validate the sum of kernel excesses against the sum of the unspent
+		// outputs.
+		let sums = self.validate_sums(header)?;
 
-		// this is a relatively expensive verification step
+		// Verify all the kernel signatures.
+		// This is a relatively expensive verification step.
 		self.verify_kernel_signatures()?;
 
-		// verify the rangeproof for each output in the sum above
-		// this is an expensive operation (only verified if requested)
+		// Verify the rangeproofs for all the unspent outputs.
+		// This is an expensive operation (only verified if requested).
 		if !skip_rproofs {
 			self.verify_rangeproofs()?;
 		}
 
-		Ok((output_sum, kernel_sum))
-	}
-
-	/// Save blocks sums (the output_sum and kernel_sum) for the given block
-	/// header.
-	pub fn save_latest_block_sums(
-		&self,
-		header: &BlockHeader,
-		output_sum: Commitment,
-		kernel_sum: Commitment,
-	) -> Result<(), Error> {
-		self.commit_index.save_block_sums(
-			&header.hash(),
-			&BlockSums {
-				output_sum,
-				kernel_sum,
-			},
-		)?;
-		Ok(())
+		Ok(sums)
 	}
 
 	/// Rebuild the index of MMR positions to the corresponding Output and

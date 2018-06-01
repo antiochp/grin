@@ -31,7 +31,7 @@ use keychain;
 use keychain::BlindingFactor;
 use ser::{self, read_and_verify_sorted, Readable, Reader, Writeable, WriteableSorted, Writer};
 use util::LOGGER;
-use util::{secp, static_secp_instance};
+use util::{secp, secp_static, static_secp_instance};
 
 /// Errors thrown by Block validation
 #[derive(Debug, Clone, PartialEq)]
@@ -109,9 +109,13 @@ pub struct BlockHeader {
 	/// Merklish root of all the commitments in the TxHashSet
 	pub output_root: Hash,
 	/// Merklish root of all range proofs in the TxHashSet
-	pub range_proof_root: Hash,
+	pub rproof_root: Hash,
 	/// Merklish root of all transaction kernels in the TxHashSet
 	pub kernel_root: Hash,
+	/// Sum of all unspent (UTXO) outputs up to and including this block.
+	pub utxo_sum: Commitment,
+	/// Sum of all kernels up to and including this block.
+	pub kernel_sum: Commitment,
 	/// Total accumulated sum of kernel offsets since genesis block.
 	/// We can derive the kernel offset sum for *this* block from
 	/// the total kernel offset of the previous block header.
@@ -132,8 +136,10 @@ impl Default for BlockHeader {
 			timestamp: time::at_utc(time::Timespec { sec: 0, nsec: 0 }),
 			total_difficulty: Difficulty::one(),
 			output_root: ZERO_HASH,
-			range_proof_root: ZERO_HASH,
+			rproof_root: ZERO_HASH,
 			kernel_root: ZERO_HASH,
+			utxo_sum: secp_static::commit_to_zero_value(),
+			kernel_sum: secp_static::commit_to_zero_value(),
 			total_kernel_offset: BlindingFactor::zero(),
 			nonce: 0,
 			pow: Proof::zero(proof_size),
@@ -163,6 +169,8 @@ impl Readable for BlockHeader {
 		let output_root = Hash::read(reader)?;
 		let rproof_root = Hash::read(reader)?;
 		let kernel_root = Hash::read(reader)?;
+		let utxo_sum = Commitment::read(reader)?;
+		let kernel_sum = Commitment::read(reader)?;
 		let total_kernel_offset = BlindingFactor::read(reader)?;
 		let nonce = reader.read_u64()?;
 		let pow = Proof::read(reader)?;
@@ -172,20 +180,22 @@ impl Readable for BlockHeader {
 		}
 
 		Ok(BlockHeader {
-			version: version,
-			height: height,
-			previous: previous,
+			version,
+			height,
+			previous,
 			timestamp: time::at_utc(time::Timespec {
 				sec: timestamp,
 				nsec: 0,
 			}),
-			total_difficulty: total_difficulty,
-			output_root: output_root,
-			range_proof_root: rproof_root,
-			kernel_root: kernel_root,
-			total_kernel_offset: total_kernel_offset,
-			nonce: nonce,
-			pow: pow,
+			total_difficulty,
+			output_root,
+			rproof_root,
+			kernel_root,
+			utxo_sum,
+			kernel_sum,
+			total_kernel_offset,
+			nonce,
+			pow,
 		})
 	}
 }
@@ -201,8 +211,10 @@ impl BlockHeader {
 			[write_i64, self.timestamp.to_timespec().sec],
 			[write_u64, self.total_difficulty.into_num()],
 			[write_fixed_bytes, &self.output_root],
-			[write_fixed_bytes, &self.range_proof_root],
+			[write_fixed_bytes, &self.rproof_root],
 			[write_fixed_bytes, &self.kernel_root],
+			[write_fixed_bytes, &self.utxo_sum],
+			[write_fixed_bytes, &self.kernel_sum],
 			[write_fixed_bytes, &self.total_kernel_offset],
 			[write_u64, self.nonce]
 		);
@@ -638,12 +650,16 @@ impl Block {
 		}
 	}
 
+	///
+	/// TODO - how to split this in two - one to generate the new sums and one
+	/// to verify against these sums???
+	///
 	/// Validates all the elements in a block that can be checked without
 	/// additional data. Includes commitment sums and kernels, Merkle
 	/// trees, reward, etc.
 	pub fn validate(
 		&self,
-		prev_output_sum: &Commitment,
+		prev_utxo_sum: &Commitment,
 		prev_kernel_sum: &Commitment,
 	) -> Result<((Commitment, Commitment)), Error> {
 		self.verify_weight()?;
@@ -651,9 +667,8 @@ impl Block {
 		self.verify_coinbase()?;
 		self.verify_inputs()?;
 		self.verify_kernel_lock_heights()?;
-		let (new_output_sum, new_kernel_sum) = self.verify_sums(prev_output_sum, prev_kernel_sum)?;
-
-		Ok((new_output_sum, new_kernel_sum))
+		let (new_utxo_sum, new_kernel_sum) = self.verify_sums(prev_utxo_sum, prev_kernel_sum)?;
+		Ok((new_utxo_sum, new_kernel_sum))
 	}
 
 	fn verify_weight(&self) -> Result<(), Error> {

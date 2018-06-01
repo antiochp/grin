@@ -190,26 +190,6 @@ impl Chain {
 
 						extension.validate_roots(&header)?;
 
-						// now check we have the "block sums" for the block in question
-						// if we have no sums (migrating an existing node) we need to go
-						// back to the txhashset and sum the outputs and kernels
-						if header.height > 0 && store.get_block_sums(&header.hash()).is_err() {
-							debug!(
-								LOGGER,
-								"chain: init: building (missing) block sums for {} @ {}",
-								header.height,
-								header.hash()
-							);
-							let (output_sum, kernel_sum) = extension.validate_sums(&header)?;
-							store.save_block_sums(
-								&header.hash(),
-								&BlockSums {
-									output_sum,
-									kernel_sum,
-								},
-							)?;
-						}
-
 						Ok(())
 					});
 
@@ -523,8 +503,8 @@ impl Chain {
 		})
 	}
 
-	/// Sets the txhashset roots on a brand new block by applying the block on
-	/// the current txhashset state.
+	/// Sets the txhashset roots on a brand new block
+	/// by applying the block to the current txhashset state.
 	pub fn set_txhashset_roots(&self, b: &mut Block, is_fork: bool) -> Result<(), Error> {
 		let mut txhashset = self.txhashset.write().unwrap();
 		let store = self.store.clone();
@@ -537,10 +517,17 @@ impl Chain {
 			Ok(extension.roots())
 		})?;
 
+		// Set the roots on the block header.
 		b.header.output_root = roots.output_root;
-		b.header.range_proof_root = roots.rproof_root;
+		b.header.rproof_root = roots.rproof_root;
 		b.header.kernel_root = roots.kernel_root;
+
 		Ok(())
+	}
+
+	pub fn set_block_sums(&self, b: &mut Block, sums: &BlockSums) {
+		b.header.utxo_sum = sums.utxo_sum;
+		b.header.kernel_sum = sums.kernel_sum;
 	}
 
 	/// Return a pre-built Merkle proof for the given commitment from the store.
@@ -623,10 +610,10 @@ impl Chain {
 		let mut txhashset = txhashset::TxHashSet::open(self.db_root.clone(), self.store.clone())?;
 
 		// Note: we are validating against a writeable extension.
+		// We will write the new txhashset state if validation is successful.
 		txhashset::extending(&mut txhashset, |extension| {
 			extension.rewind(&header)?;
-			let (output_sum, kernel_sum) = extension.validate(&header, false)?;
-			extension.save_latest_block_sums(&header, output_sum, kernel_sum)?;
+			extension.validate(&header, false)?;
 			extension.rebuild_index()?;
 			Ok(())
 		})?;
@@ -702,8 +689,6 @@ impl Chain {
 				Ok(b) => {
 					count += 1;
 					self.store.delete_block(&b.hash())?;
-					self.store.delete_block_marker(&b.hash())?;
-					self.store.delete_block_sums(&b.hash())?;
 				}
 				Err(NotFoundErr) => {
 					break;
@@ -820,13 +805,6 @@ impl Chain {
 		self.store
 			.get_block_marker(bh)
 			.map_err(|e| Error::StoreErr(e, "chain get block marker".to_owned()))
-	}
-
-	/// Get the blocks sums for the specified block hash.
-	pub fn get_block_sums(&self, bh: &Hash) -> Result<BlockSums, Error> {
-		self.store
-			.get_block_sums(bh)
-			.map_err(|e| Error::StoreErr(e, "chain get block sums".to_owned()))
 	}
 
 	/// Gets the block header at the provided height

@@ -88,7 +88,7 @@ pub struct TxHashSet {
 	/// Output Root Hash
 	pub output_root_hash: String,
 	// Rangeproof root hash
-	pub range_proof_root_hash: String,
+	pub rproof_root_hash: String,
 	// Kernel set root hash
 	pub kernel_root_hash: String,
 }
@@ -98,7 +98,7 @@ impl TxHashSet {
 		let roots = head.get_txhashset_roots();
 		TxHashSet {
 			output_root_hash: roots.0.to_hex(),
-			range_proof_root_hash: roots.1.to_hex(),
+			rproof_root_hash: roots.1.to_hex(),
 			kernel_root_hash: roots.2.to_hex(),
 		}
 	}
@@ -474,7 +474,7 @@ pub struct BlockHeaderPrintable {
 	/// Merklish root of all the commitments in the TxHashSet
 	pub output_root: String,
 	/// Merklish root of all range proofs in the TxHashSet
-	pub range_proof_root: String,
+	pub rproof_root: String,
 	/// Merklish root of all transaction kernels in the TxHashSet
 	pub kernel_root: String,
 	/// Nonce increment used to mine this block.
@@ -494,7 +494,7 @@ impl BlockHeaderPrintable {
 			previous: util::to_hex(h.previous.to_vec()),
 			timestamp: h.timestamp.rfc3339().to_string(),
 			output_root: util::to_hex(h.output_root.to_vec()),
-			range_proof_root: util::to_hex(h.range_proof_root.to_vec()),
+			rproof_root: util::to_hex(h.rproof_root.to_vec()),
 			kernel_root: util::to_hex(h.kernel_root.to_vec()),
 			nonce: h.nonce,
 			total_difficulty: h.total_difficulty.into_num(),

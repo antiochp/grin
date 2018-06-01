@@ -307,27 +307,23 @@ fn validate_header(header: &BlockHeader, ctx: &mut BlockContext) -> Result<(), E
 	Ok(())
 }
 
-fn validate_block(b: &Block, ctx: &mut BlockContext) -> Result<(), Error> {
+fn validate_block(block: &Block, ctx: &mut BlockContext) -> Result<(BlockSums), Error> {
 	// If this is the first block then we have no previous block sums stored.
-	let block_sums = if b.header.height == 1 {
+	let sums = if block.header.height == 1 {
 		BlockSums::default()
 	} else {
-		ctx.store.get_block_sums(&b.header.previous)?
+		let prev = ctx.store.get_block_header(&block.header.previous)?;
+		BlockSums::from_block(&prev)
 	};
 
-	let (new_output_sum, new_kernel_sum) =
-		b.validate(&block_sums.output_sum, &block_sums.kernel_sum)
-			.map_err(&Error::InvalidBlockProof)?;
+	let (utxo_sum, kernel_sum) = block
+		.validate(&sums.utxo_sum, &sums.kernel_sum)
+		.map_err(&Error::InvalidBlockProof)?;
 
-	ctx.store.save_block_sums(
-		&b.hash(),
-		&BlockSums {
-			output_sum: new_output_sum,
-			kernel_sum: new_kernel_sum,
-		},
-	)?;
-
-	Ok(())
+	Ok(BlockSums {
+		utxo_sum,
+		kernel_sum,
+	})
 }
 
 /// Fully validate the block by applying it to the txhashset extension
@@ -343,7 +339,7 @@ fn validate_block_via_txhashset(b: &Block, ext: &mut txhashset::Extension) -> Re
 	ext.apply_block(&b)?;
 
 	let roots = ext.roots();
-	if roots.output_root != b.header.output_root || roots.rproof_root != b.header.range_proof_root
+	if roots.output_root != b.header.output_root || roots.rproof_root != b.header.rproof_root
 		|| roots.kernel_root != b.header.kernel_root
 	{
 		ext.dump(false);
@@ -358,7 +354,7 @@ fn validate_block_via_txhashset(b: &Block, ext: &mut txhashset::Extension) -> Re
 			LOGGER,
 			"validate_block_via_txhashset: rproof roots - {:?}, {:?}",
 			roots.rproof_root,
-			b.header.range_proof_root,
+			b.header.rproof_root,
 		);
 		debug!(
 			LOGGER,

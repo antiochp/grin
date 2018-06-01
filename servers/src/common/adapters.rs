@@ -35,8 +35,8 @@ use core::core::transaction::Transaction;
 use p2p;
 use pool;
 use store;
-use util::LOGGER;
 use util::OneTime;
+use util::LOGGER;
 
 // All adapters use `Weak` references instead of `Arc` to avoid cycles that
 // can never be destroyed. These 2 functions are simple helpers to reduce the
@@ -138,27 +138,18 @@ impl p2p::ChainAdapter for NetToChainAdapter {
 
 			let block = core::Block::hydrate_from(cb.clone(), txs);
 
-			let chain = self.chain
-				.upgrade()
-				.expect("failed to upgrade weak ref to chain");
-
-			if let Ok(sums) = chain.get_block_sums(&cb.header.previous) {
-				if block.validate(&sums.output_sum, &sums.kernel_sum).is_ok() {
-					debug!(LOGGER, "adapter: successfully hydrated block from tx pool!");
-					self.process_block(block, addr)
-				} else {
-					debug!(
-						LOGGER,
-						"adapter: block invalid after hydration, requesting full block"
-					);
-					self.request_block(&cb.header, &addr);
-					true
-				}
+			if block
+				.validate(&cb.header.utxo_sum, &cb.header.kernel_sum)
+				.is_ok()
+			{
+				debug!(LOGGER, "adapter: successfully hydrated block from tx pool!");
+				self.process_block(block, addr)
 			} else {
 				debug!(
 					LOGGER,
-					"adapter: failed to retrieve previous block header (still syncing?)"
+					"adapter: block invalid after hydration, requesting full block"
 				);
+				self.request_block(&cb.header, &addr);
 				true
 			}
 		}
