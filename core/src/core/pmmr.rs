@@ -78,11 +78,11 @@ where
 	/// (ignoring the remove log).
 	fn get_data_from_file(&self, position: u64) -> Option<T>;
 
-	/// Remove HashSums by insertion position. An index is also provided so the
+	/// Remove Hash by insertion position. An index is also provided so the
 	/// underlying backend can implement some rollback of positions up to a
 	/// given index (practically the index is the height of a block that
 	/// triggered removal).
-	fn remove(&mut self, positions: Vec<u64>, index: u32) -> Result<(), String>;
+	fn remove(&mut self, position: u64, index: u32) -> Result<(), String>;
 
 	/// Returns the data file path.. this is a bit of a hack now that doesn't
 	/// sit well with the design, but TxKernels have to be summed and the
@@ -417,62 +417,44 @@ where
 		Ok(())
 	}
 
-	/// Prune an element from the tree given its position. Note that to be able
-	/// to provide that position and prune, consumers of this API are expected
-	/// to keep an index of elements to positions in the tree. Prunes parent
-	/// nodes as well when they become childless.
 	pub fn prune(&mut self, position: u64, index: u32) -> Result<bool, String> {
-		if self.backend.get_hash(position).is_none() {
-			return Ok(false);
-		}
-		let prunable_height = bintree_postorder_height(position);
-		if prunable_height > 0 {
-			// only leaves can be pruned
+		if !is_leaf(position) {
 			return Err(format!("Node at {} is not a leaf, can't prune.", position));
 		}
 
-		// loop going up the tree, from node to parent, as long as we stay inside
-		// the tree.
-		let mut to_prune = vec![];
-
-		let mut current = position;
-		while current + 1 <= self.last_pos {
-			let (parent, sibling) = family(current);
-
-			to_prune.push(current);
-
-			if parent > self.last_pos {
-				// can't prune when our parent isn't here yet
-				break;
-			}
-
-			// if we have a pruned sibling, we can continue up the tree
-			// otherwise we're done
-			if self.backend.get_hash(sibling).is_none() {
-				current = parent;
-			} else {
-				break;
-			}
+		if self.backend.get_hash(position).is_none() {
+			return Ok(false);
 		}
-		self.backend.remove(to_prune, index)?;
+
+		self.backend.remove(position, index)?;
 		Ok(true)
 	}
 
 	/// Get the hash at provided position in the MMR.
 	pub fn get_hash(&self, pos: u64) -> Option<Hash> {
 		if pos > self.last_pos {
+			// If we are beyond the rhs of the MMR return None.
 			None
-		} else {
+		} else if is_leaf(pos) {
+			// If we are a leaf then get hash from the backend.
 			self.backend.get_hash(pos)
+		} else {
+			// If we are not a leaf get hash ignoring the remove log.
+			self.backend.get_from_file(pos)
 		}
 	}
 
 	/// Get the data element at provided position in the MMR.
 	pub fn get_data(&self, pos: u64) -> Option<T> {
 		if pos > self.last_pos {
+			// If we are beyond the rhs of the MMR return None.
 			None
-		} else {
+		} else if is_leaf(pos) {
+			// If we are a leaf then get data from the backend.
 			self.backend.get_data(pos)
+		} else {
+			// If we are not a leaf then return None as only leaves have data.
+			None
 		}
 	}
 
@@ -962,6 +944,21 @@ pub fn is_left_sibling(pos: u64) -> bool {
 	sibling_pos > pos
 }
 
+pub fn path(pos: u64, last_pos: u64) -> Vec<u64> {
+	let mut path = vec![pos];
+	let mut current = pos;
+	while current + 1 <= last_pos {
+		let (parent, _) = family(current);
+		if parent > last_pos {
+			break;
+		}
+		path.push(parent);
+		current = parent;
+	}
+	println!("path - {}, {:?}, peaks {:?}", pos, path, peaks(last_pos));
+	path
+}
+
 /// For a given starting position calculate the parent and sibling positions
 /// for the branch/path from that position to the peak of the tree.
 /// We will use the sibling positions to generate the "path" of a Merkle proof.
@@ -1130,18 +1127,6 @@ mod test {
 				elems: vec![],
 				remove_list: vec![],
 			}
-		}
-
-		/// Current number of elements in the underlying Vec.
-		pub fn used_size(&self) -> usize {
-			let mut usz = self.elems.len();
-			for (idx, _) in self.elems.iter().enumerate() {
-				let idx = idx as u64;
-				if self.remove_list.contains(&idx) {
-					usz -= 1;
-				}
-			}
-			usz
 		}
 	}
 
@@ -1611,13 +1596,18 @@ mod test {
 			sz = pmmr.unpruned_size();
 		}
 
+		// First check the initial numbers of elements.
+		assert_eq!(ba.elems.len(), 16);
+		assert_eq!(ba.remove_list.len(), 0);
+
 		// pruning a leaf with no parent should do nothing
 		{
 			let mut pmmr: PMMR<TestElem, _> = PMMR::at(&mut ba, sz);
 			pmmr.prune(16, 0).unwrap();
 			assert_eq!(orig_root, pmmr.root());
 		}
-		assert_eq!(ba.used_size(), 16);
+		assert_eq!(ba.elems.len(), 16);
+		assert_eq!(ba.remove_list.len(), 1);
 
 		// pruning leaves with no shared parent just removes 1 element
 		{
@@ -1625,14 +1615,16 @@ mod test {
 			pmmr.prune(2, 0).unwrap();
 			assert_eq!(orig_root, pmmr.root());
 		}
-		assert_eq!(ba.used_size(), 15);
+		assert_eq!(ba.elems.len(), 16);
+		assert_eq!(ba.remove_list.len(), 2);
 
 		{
 			let mut pmmr: PMMR<TestElem, _> = PMMR::at(&mut ba, sz);
 			pmmr.prune(4, 0).unwrap();
 			assert_eq!(orig_root, pmmr.root());
 		}
-		assert_eq!(ba.used_size(), 14);
+		assert_eq!(ba.elems.len(), 16);
+		assert_eq!(ba.remove_list.len(), 3);
 
 		// pruning a non-leaf node has no effect
 		{
@@ -1640,23 +1632,27 @@ mod test {
 			pmmr.prune(3, 0).unwrap_err();
 			assert_eq!(orig_root, pmmr.root());
 		}
-		assert_eq!(ba.used_size(), 14);
+		assert_eq!(ba.elems.len(), 16);
+		assert_eq!(ba.remove_list.len(), 3);
 
-		// pruning sibling removes subtree
+		// TODO - no longer true (leaves only now) - pruning sibling removes subtree
 		{
 			let mut pmmr: PMMR<TestElem, _> = PMMR::at(&mut ba, sz);
 			pmmr.prune(5, 0).unwrap();
 			assert_eq!(orig_root, pmmr.root());
 		}
-		assert_eq!(ba.used_size(), 12);
+		assert_eq!(ba.elems.len(), 16);
+		assert_eq!(ba.remove_list.len(), 4);
 
-		// pruning all leaves under level >1 removes all subtree
+		// TODO - no longeer true (leaves only now) - pruning all leaves under level >1
+		// removes all subtree
 		{
 			let mut pmmr: PMMR<TestElem, _> = PMMR::at(&mut ba, sz);
 			pmmr.prune(1, 0).unwrap();
 			assert_eq!(orig_root, pmmr.root());
 		}
-		assert_eq!(ba.used_size(), 9);
+		assert_eq!(ba.elems.len(), 16);
+		assert_eq!(ba.remove_list.len(), 5);
 
 		// pruning everything should only leave us with a single peak
 		{
@@ -1666,7 +1662,8 @@ mod test {
 			}
 			assert_eq!(orig_root, pmmr.root());
 		}
-		assert_eq!(ba.used_size(), 1);
+		assert_eq!(ba.elems.len(), 16);
+		assert_eq!(ba.remove_list.len(), 9);
 	}
 
 	#[test]
