@@ -133,8 +133,9 @@ pub struct TxKernel {
 	/// Fee originally included in the transaction this proof is for.
 	pub fee: u64,
 	/// A kernel can only be added to a block at this height or later.
-	/// A block will not be accepted if it contains kernels with invalid lock_heights.
-	/// A tx will not be accepted if this height has not yet been reached.
+	/// A block will not be accepted if it contains kernels with invalid
+	/// lock_heights. A tx will not be accepted if this height has not yet
+	/// been reached.
 	pub lock_height: u64,
 
 	/// Remainder of the sum of all transaction commitments. If the transaction
@@ -144,19 +145,18 @@ pub struct TxKernel {
 	/// The signature proving the excess is a valid public key, which signs
 	/// the transaction fee.
 	pub excess_sig: Signature,
-
-	// If lock_height_relative is Some then the height is calculated relative
-	// to this (TBD - is this an output commitment or a kernel commitment?)
-	// TODO - which is more useful? which is actually possible?
-	// TODO - go with output commitment for now -
-	// so we can do the following -
-	// * retrieve the output_pos from the db/index based on commitment
-	// does this output need to exist? what if it gets spent?
-	// so maybe we need to use kernel commitments?
-	// can we use a Merkle proof to prove this (similar to coinbase maturity?)
-	// i.e. we need a way to translate an output commitment to a block height
-	// pub lock_height_rel: Option<Commitment>,
-	// pub lock_height_proof: Option<MerkleProof>,
+	/* If lock_height_relative is Some then the height is calculated relative
+	 * to this (TBD - is this an output commitment or a kernel commitment?)
+	 * TODO - which is more useful? which is actually possible?
+	 * TODO - go with output commitment for now -
+	 * so we can do the following -
+	 * * retrieve the output_pos from the db/index based on commitment
+	 * does this output need to exist? what if it gets spent?
+	 * so maybe we need to use kernel commitments?
+	 * can we use a Merkle proof to prove this (similar to coinbase maturity?)
+	 * i.e. we need a way to translate an output commitment to a block height
+	 * pub lock_height_rel: Option<Commitment>,
+	 * pub lock_height_proof: Option<MerkleProof>, */
 }
 
 hashable_ord!(TxKernel);
@@ -683,13 +683,13 @@ impl Writeable for Input {
 		self.commit.write(writer)?;
 
 		// if writer.serialization_mode() != ser::SerializationMode::Hash {
-			if self.features.contains(OutputFeatures::COINBASE_OUTPUT) {
-				let block_hash = &self.block_hash.unwrap_or(ZERO_HASH);
-				let merkle_proof = self.merkle_proof();
+		if self.features.contains(OutputFeatures::COINBASE_OUTPUT) {
+			let block_hash = &self.block_hash.unwrap_or(ZERO_HASH);
+			let merkle_proof = self.merkle_proof();
 
-				writer.write_fixed_bytes(block_hash)?;
-				merkle_proof.write(writer)?;
-			}
+			writer.write_fixed_bytes(block_hash)?;
+			merkle_proof.write(writer)?;
+		}
 		// }
 
 		Ok(())
