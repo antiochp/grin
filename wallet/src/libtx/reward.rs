@@ -37,8 +37,6 @@ where
 	let commit = keychain.commit(value, key_id)?;
 	let msg = ProofMessageElements::new(value, key_id);
 
-	trace!(LOGGER, "Block reward - Pedersen Commit is: {:?}", commit,);
-
 	let rproof = proof::create(
 		keychain,
 		value,
@@ -69,14 +67,48 @@ where
 	let msg = secp::Message::from_slice(&kernel_sig_msg(0, height))?;
 	let sig = aggsig::sign_from_key_id(&secp, keychain, &msg, &key_id)?;
 
-	let proof = TxKernel {
+	let kernel = TxKernel {
 		features: KernelFeatures::COINBASE_KERNEL,
 		excess: excess,
 		excess_sig: sig,
+		// No fee for including this coinbase reward itself.
+		// Note: this is different to the fees included in this coinbase output
+		// from the tx fees of the mined block.
 		fee: 0,
 		// lock_height here is the height of the block (tx should be valid immediately)
 		// *not* the lock_height of the coinbase output (only spendable 1,000 blocks later)
 		lock_height: height,
 	};
-	Ok((output, proof))
+	Ok((output, kernel))
+}
+
+#[cfg(test)]
+mod test {
+	use super::*;
+	use keychain::ExtKeychain;
+
+	#[test]
+	fn test_reward_building() {
+		let keychain = ExtKeychain::from_random_seed().unwrap();
+		let key_id1 = keychain.derive_key_id(1).unwrap();
+
+		let (out, kern) = output(&keychain, &key_id1, 10, 1).unwrap();
+		// No fees on the kernel itself (unrelated to fees collected by the coinbase reward).
+		assert_eq!(kern.fee, 0);
+		assert_eq!(kern.lock_height, 1);
+
+		// Now verify the relationship between the output commitment,
+		// the reward and the kernel excess.
+		// Given an output commitment and a fee we can identify the kernel excess.
+		let kernel_commit = {
+			let secp = static_secp_instance();
+			let secp = secp.lock().unwrap();
+
+			let block_reward = reward(10);
+			let reward_commit = secp.commit_value(block_reward).unwrap();
+			secp.commit_sum(vec![out.commitment()], vec![reward_commit]).unwrap()
+		};
+
+		assert_eq!(kern.excess(), kernel_commit);
+	}
 }
