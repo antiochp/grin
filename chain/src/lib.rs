@@ -46,8 +46,8 @@ mod error;
 pub mod pipe;
 pub mod store;
 pub mod txhashset;
-pub mod utxo_view;
 pub mod types;
+pub mod utxo_view;
 
 // Re-export the base interface
 

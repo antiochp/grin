@@ -39,8 +39,8 @@ use grin_store::pmmr::{PMMRBackend, PMMR_FILES};
 use grin_store::types::prune_noop;
 use store::{Batch, ChainStore};
 use types::{TxHashSetRoots, TxHashsetWriteStatus};
-use utxo_view::UTXOView;
 use util::{file, secp_static, zip, LOGGER};
+use utxo_view::UTXOView;
 
 const TXHASHSET_SUBDIR: &'static str = "txhashset";
 const OUTPUT_SUBDIR: &'static str = "output";

@@ -34,7 +34,7 @@ use error::{Error, ErrorKind};
 use grin_store::pmmr::{PMMRBackend, PMMR_FILES};
 use store::{Batch, ChainStore};
 use txhashset;
-use txhashset::{TxHashSet, PMMRHandle, input_pos_to_rewind};
+use txhashset::{input_pos_to_rewind, PMMRHandle, TxHashSet};
 
 pub struct UTXOView<'a> {
 	output_pmmr: PMMR<'a, OutputIdentifier, PMMRBackend<OutputIdentifier>>,
@@ -46,7 +46,7 @@ impl<'a> UTXOView<'a> {
 		output_pmmr: &'a mut PMMRHandle<OutputIdentifier>,
 		store: Arc<ChainStore>,
 	) -> UTXOView<'a> {
-		UTXOView {output_pmmr, store}
+		UTXOView { output_pmmr, store }
 	}
 
 	/// "Fast" validation of a set of inputs and outputs (from either a block or a transaction).
@@ -112,31 +112,16 @@ impl<'a> UTXOView<'a> {
 		// undone during rewind).
 		// Rewound output pos will be removed from the MMR.
 		// Rewound input (spent) pos will be added back to the MMR.
-		let rewind_rm_pos = input_pos_to_rewind(
-			self.store.clone(),
-			block_header,
-			&head_header,
-			&self.batch,
-		)?;
+		let rewind_rm_pos =
+			input_pos_to_rewind(self.store.clone(), block_header, &head_header, &self.batch)?;
 
-		self.rewind_to_pos(
-			block_header.output_mmr_size,
-			&rewind_rm_pos,
-		)
+		self.rewind_to_pos(block_header.output_mmr_size, &rewind_rm_pos)
 	}
 
 	/// Rewinds the MMRs to the provided positions, given the output and
 	/// kernel we want to rewind to.
-	fn rewind_to_pos(
-		&mut self,
-		output_pos: u64,
-		rewind_rm_pos: &Bitmap,
-	) -> Result<(), Error> {
-		trace!(
-			LOGGER,
-			"Rewind utxo_view to output {}",
-			output_pos,
-		);
+	fn rewind_to_pos(&mut self, output_pos: u64, rewind_rm_pos: &Bitmap) -> Result<(), Error> {
+		trace!(LOGGER, "Rewind utxo_view to output {}", output_pos,);
 
 		self.output_pmmr
 			.rewind(output_pos, rewind_rm_pos)
