@@ -26,7 +26,7 @@ use prune_list::PruneList;
 use types::{prune_noop, AppendOnlyFile};
 use util::LOGGER;
 
-const PMMR_HASH_FILE: &'static str = "pmmr_hash.bin";
+pub const PMMR_HASH_FILE: &'static str = "pmmr_hash.bin";
 const PMMR_DATA_FILE: &'static str = "pmmr_data.bin";
 const PMMR_LEAF_FILE: &'static str = "pmmr_leaf.bin";
 const PMMR_PRUN_FILE: &'static str = "pmmr_prun.bin";
@@ -70,9 +70,9 @@ where
 	/// Append the provided Hashes to the backend storage.
 	#[allow(unused_variables)]
 	fn append(&mut self, position: u64, data: Vec<(Hash, Option<T>)>) -> Result<(), String> {
-		for d in data {
-			self.hash_file.append(&mut ser::ser_vec(&d.0).unwrap());
-			if let Some(elem) = d.1 {
+		for (h, d) in data {
+			self.hash_file.append(&mut ser::ser_vec(&h).unwrap());
+			if let Some(elem) = d {
 				self.data_file.append(&mut ser::ser_vec(&elem).unwrap());
 
 				if self.prunable {
@@ -459,6 +459,5 @@ fn removed_excl_roots(removed: Bitmap) -> Bitmap {
 		.filter(|pos| {
 			let (parent_pos, _) = family(*pos as u64);
 			removed.contains(parent_pos as u32)
-		})
-		.collect()
+		}).collect()
 }

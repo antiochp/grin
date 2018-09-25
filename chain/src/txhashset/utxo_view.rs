@@ -18,7 +18,7 @@ use core::core::pmmr::ReadonlyPMMR;
 use core::core::{Block, Input, Output, OutputIdentifier, Transaction};
 
 use error::{Error, ErrorKind};
-use grin_store::pmmr::PMMRBackend;
+use grin_store::pmmr_backend::PMMRBackend;
 use store::Batch;
 
 /// Readonly view of the UTXO set (based on output MMR).
