@@ -257,7 +257,6 @@ pub fn sync_block_headers(
 			// extension.validate_root(header)?;
 
 			extension.apply_header(header)?;
-
 		}
 
 		if !header_head_updated {

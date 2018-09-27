@@ -33,7 +33,11 @@ pub struct HeaderExtension<'a> {
 }
 
 impl<'a> HeaderExtension<'a> {
-	pub fn new(trees: &'a mut TxHashSet, batch: &'a Batch, header: BlockHeader) -> HeaderExtension<'a> {
+	pub fn new(
+		trees: &'a mut TxHashSet,
+		batch: &'a Batch,
+		header: BlockHeader,
+	) -> HeaderExtension<'a> {
 		HeaderExtension {
 			header,
 			pmmr: PMMR::at(
@@ -46,17 +50,18 @@ impl<'a> HeaderExtension<'a> {
 	}
 
 	pub fn apply_header(&mut self, header: &BlockHeader) -> Result<(), Error> {
-		let pos = self.pmmr
+		let pos = self
+			.pmmr
 			.push(header.clone())
 			.map_err(&ErrorKind::TxHashSetErr)?;
 
-			debug!(
-				LOGGER,
-				"header_extension: apply_header: header {} at {}, MMR pos {}",
-				header.hash(),
-				header.height,
-				pos,
-			);
+		debug!(
+			LOGGER,
+			"header_extension: apply_header: header {} at {}, MMR pos {}",
+			header.hash(),
+			header.height,
+			pos,
+		);
 
 		// Update the header on the extension to reflect the block we just applied.
 		self.header = header.clone();

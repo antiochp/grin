@@ -63,10 +63,7 @@ impl<T> PMMRDBHandle<T>
 where
 	T: PMMRable + ::std::fmt::Debug,
 {
-	fn new(
-		root_dir: String,
-		file_name: &str,
-	) -> Result<PMMRDBHandle<T>, Error> {
+	fn new(root_dir: String, file_name: &str) -> Result<PMMRDBHandle<T>, Error> {
 		let path = Path::new(&root_dir).join(TXHASHSET_SUBDIR).join(file_name);
 		fs::create_dir_all(path.clone())?;
 		let backend = PMMRDBBackend::new(path.to_str().unwrap().to_string())?;
@@ -416,7 +413,6 @@ where
 				trace!(LOGGER, "Rollbacking txhashset extension. sizes {:?}", sizes);
 
 				trees.discard();
-
 			} else {
 				trace!(LOGGER, "Committing txhashset extension. sizes {:?}", sizes);
 				child_batch.commit()?;
@@ -470,7 +466,10 @@ where
 			if rollback {
 				trees.header_pmmr_h.backend.discard();
 			} else {
-				debug!(LOGGER, "Committing txhashset (header) extension, size {}", size);
+				debug!(
+					LOGGER,
+					"Committing txhashset (header) extension, size {}", size
+				);
 				child_batch.commit()?;
 				trees.header_pmmr_h.backend.sync()?;
 				trees.header_pmmr_h.last_pos = size;
@@ -479,7 +478,6 @@ where
 		}
 	}
 }
-
 
 /// Allows the application of new blocks on top of the sum trees in a
 /// reversible manner within a unit of work provided by the `extending`
@@ -602,7 +600,6 @@ impl<'a> Extension<'a> {
 
 	/// Apply a new block to the existing state.
 	pub fn apply_block(&mut self, b: &Block) -> Result<(), Error> {
-
 		// TODO apply the header here as we process the block.
 		// self.apply_header(&b.header)?;
 
