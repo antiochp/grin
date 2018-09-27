@@ -26,7 +26,7 @@ use prune_list::PruneList;
 use types::{prune_noop, AppendOnlyFile};
 use util::LOGGER;
 
-const PMMR_HASH_FILE: &'static str = "pmmr_hash.bin";
+pub const PMMR_HASH_FILE: &'static str = "pmmr_hash.bin";
 const PMMR_DATA_FILE: &'static str = "pmmr_data.bin";
 const PMMR_LEAF_FILE: &'static str = "pmmr_leaf.bin";
 const PMMR_PRUN_FILE: &'static str = "pmmr_prun.bin";

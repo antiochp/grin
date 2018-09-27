@@ -145,7 +145,7 @@ pub fn process_block(
 		if is_next_block(&b.header, ctx) {
 			// No need to rewind if we are processing the next block.
 		} else {
-			// Rewind the re-apply blocks on the forked chain to
+			// Rewind then re-apply blocks on the forked chain to
 			// put the txhashset in the correct forked state
 			// (immediately prior to this new block).
 			rewind_and_apply_fork(b, extension)?;
@@ -216,24 +216,60 @@ pub fn sync_block_headers(
 		);
 	}
 
-	let mut tip = batch.get_header_head()?;
+	let mut sync_tip = batch.get_sync_head()?;
+
+	// We are extending the header chain (potentially a fork) from the current sync_head.
+	let prev_header = batch.get_block_header(&sync_tip.last_block_h)?;
+	let mut header_head_updated = false;
+
+	let mut child_batch = batch.child()?;
 
 	for header in headers {
-		validate_header(header, sync_ctx, batch)?;
-		add_block_header(header, batch)?;
+		validate_header(header, sync_ctx, &mut child_batch)?;
+		add_block_header(header, &mut child_batch)?;
 
-		// Update header_head (but only if this header increases our total known work).
-		// i.e. Only if this header is now the head of the current "most work" chain.
-		update_header_head(header, header_ctx, batch)?;
+		// Update header_head (but only if this header increases our total work).
+		let header_tip = update_header_head(header, header_ctx, &mut child_batch)?;
+		if header_tip.is_some() {
+			header_head_updated = true;
+		}
 
 		// Update sync_head regardless of total work.
 		// We may be syncing a long fork that will *eventually* increase the work
 		// and become the "most work" chain.
 		// header_head and sync_head will diverge in this situation until we switch to
 		// a single "most work" chain.
-		tip = update_sync_head(header, sync_ctx, batch)?;
+		sync_tip = update_sync_head(header, sync_ctx, &mut child_batch)?;
 	}
-	Ok(tip)
+
+	let txhashset = sync_ctx.txhashset.clone();
+	let mut txhashset = txhashset.write().unwrap();
+
+	// TODO - we always want to do this, to validate roots.
+	// TODO - *but* we only want to commit the extension *if* header_head is updated (most work).
+	txhashset::header_extending(&mut txhashset, &mut child_batch, |extension| {
+		// TODO - short cut if rewind not necessary
+		extension.rewind(&prev_header)?;
+
+		for header in headers {
+			// TODO - validate the header MMR root here.
+			// TODO - the root from the header we are about to add should match the current MMR root
+			// extension.validate_root(header)?;
+
+			extension.apply_header(header)?;
+
+		}
+
+		if !header_head_updated {
+			extension.force_rollback();
+		}
+
+		Ok(())
+	})?;
+
+	child_batch.commit()?;
+
+	Ok(sync_tip)
 }
 
 /// Process block header as part of "header first" block propagation.
@@ -398,7 +434,7 @@ fn check_known_mmr(
 /// arranged by order of cost to have as little DoS surface as possible.
 fn validate_header(
 	header: &BlockHeader,
-	ctx: &mut BlockContext,
+	ctx: &BlockContext,
 	batch: &mut store::Batch,
 ) -> Result<(), Error> {
 	// check version, enforces scheduled hard fork

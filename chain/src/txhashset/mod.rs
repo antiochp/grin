@@ -18,7 +18,9 @@
 mod rewindable_kernel_view;
 mod txhashset;
 mod utxo_view;
+mod header_extension;
 
 pub use self::rewindable_kernel_view::*;
 pub use self::txhashset::*;
 pub use self::utxo_view::*;
+pub use self::header_extension::*;
