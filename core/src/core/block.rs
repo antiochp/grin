@@ -34,7 +34,7 @@ use core::{
 use global;
 use keychain::{self, BlindingFactor};
 use pow::{Difficulty, Proof, ProofOfWork};
-use ser::{self, Readable, Reader, Writeable, Writer};
+use ser::{self, PMMRable, Readable, Reader, Writeable, Writer};
 use util::{secp, secp_static, static_secp_instance, LOGGER};
 
 /// Errors thrown by Block validation
@@ -327,6 +327,14 @@ impl BlockHeader {
 			size += 1;
 		}
 		size
+	}
+}
+
+// We apply headers to the header and sync MMRs in the headhashset.
+// These are "hash file" only, the headers themselves are stored in the db.
+impl PMMRable for BlockHeader {
+	fn len() -> usize {
+		0
 	}
 }
 

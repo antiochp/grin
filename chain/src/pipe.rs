@@ -206,6 +206,8 @@ pub fn sync_block_headers(
 	ctx: &mut BlockContext,
 	batch: &mut store::Batch,
 ) -> Result<Tip, Error> {
+	let mut prev_header;
+
 	if let Some(header) = headers.first() {
 		debug!(
 			LOGGER,
@@ -214,6 +216,10 @@ pub fn sync_block_headers(
 			header.hash(),
 			header.height,
 		);
+
+		prev_header = batch.get_block_header(header.previous)?;
+	} else {
+		return Ok(ctx.sync_head);
 	}
 
 	let mut tip = batch.get_header_head()?;
@@ -228,6 +234,17 @@ pub fn sync_block_headers(
 		// a single "most work" chain.
 		tip = update_sync_head(header, ctx, batch)?;
 	}
+
+	// We processed all the headers successfully.
+	// Now we can apply them all to the "sync" header MMR.
+
+	let headhashset = ctx.headhashset.clone();
+	let mut headhashset = headhashset.write().unwrap();
+
+	headhashset::extending(&mut headhashset, batch, |mut extension| {
+		headhashet.rewind(xxx)?;
+	})?;
+
 	Ok(tip)
 }
 
@@ -527,8 +544,7 @@ fn validate_block(
 			&prev.total_kernel_offset,
 			&prev.total_kernel_sum,
 			verifier_cache,
-		)
-		.map_err(|e| ErrorKind::InvalidBlockProof(e))?;
+		).map_err(|e| ErrorKind::InvalidBlockProof(e))?;
 	Ok(())
 }
 
@@ -568,7 +584,8 @@ fn verify_block_sums(b: &Block, ext: &mut txhashset::Extension) -> Result<(), Er
 	let offset = b.header.total_kernel_offset();
 
 	// Verify the kernel sums for the block_sums with the new block applied.
-	let (utxo_sum, kernel_sum) = (block_sums, b as &Committed).verify_kernel_sums(overage, offset)?;
+	let (utxo_sum, kernel_sum) =
+		(block_sums, b as &Committed).verify_kernel_sums(overage, offset)?;
 
 	// Save the new block_sums for the new block to the db via the batch.
 	ext.batch.save_block_sums(
