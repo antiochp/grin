@@ -34,6 +34,7 @@ pub mod leaf_set;
 mod lmdb;
 pub mod pmmr;
 pub mod prune_list;
+pub mod prune_list_btree;
 pub mod types;
 
 const SEP: u8 = b':';
