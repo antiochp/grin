@@ -110,8 +110,12 @@ where
 	Ok(())
 }
 
+use crate::core::ser::{Reader, StreamingReader};
 use croaring::Bitmap;
+use std::collections::BTreeSet;
 use std::io::{self, Read};
+use std::time;
+
 /// Read Bitmap from a file
 pub fn read_bitmap<P: AsRef<Path>>(file_path: P) -> io::Result<Bitmap> {
 	let mut bitmap_file = File::open(file_path)?;
@@ -119,4 +123,18 @@ pub fn read_bitmap<P: AsRef<Path>>(file_path: P) -> io::Result<Bitmap> {
 	let mut buffer = Vec::with_capacity(f_md.len() as usize);
 	bitmap_file.read_to_end(&mut buffer)?;
 	Ok(Bitmap::deserialize(&buffer))
+}
+
+pub fn read_btreeset<P: AsRef<Path>>(file_path: P) -> io::Result<BTreeSet<u64>> {
+	let mut set = BTreeSet::new();
+	let mut bitmap_file = File::open(file_path)?;
+
+	// TODO - Is StreamingReader the right thing to use here?
+	// Or are we better off wrapping a buffered reader?
+	let timeout = time::Duration::from_secs(1);
+	let mut reader = StreamingReader::new(&mut bitmap_file, timeout);
+	while let Ok(x) = reader.read_u64() {
+		set.insert(x);
+	}
+	Ok(set)
 }

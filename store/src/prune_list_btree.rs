@@ -29,7 +29,7 @@ use croaring::Bitmap;
 
 use crate::core::core::pmmr::{bintree_postorder_height, family, path};
 use crate::core::ser::{BinWriter, Writeable};
-use crate::{read_bitmap, save_via_temp_file};
+use crate::{read_bitmap, read_btreeset, save_via_temp_file};
 
 /// Maintains a list of previously pruned nodes in PMMR, compacting the list as
 /// parents get pruned and allowing checking whether a leaf is pruned. Given
@@ -67,14 +67,11 @@ impl PruneListBTree {
 	/// Open an existing prune_list or create a new one.
 	pub fn open<P: AsRef<Path>>(path: P) -> io::Result<PruneListBTree> {
 		let file_path = PathBuf::from(path.as_ref());
-		// let bitmap = if file_path.exists() {
-		// 	read_bitmap(&file_path)?
-		// } else {
-		// 	Bitmap::create()
-		// };
-
-		// TODO - deser from the file...
-		let bitmap = BTreeSet::new();
+		let bitmap = if file_path.exists() {
+			read_btreeset(&file_path)?
+		} else {
+			BTreeSet::new()
+		};
 
 		let mut prune_list = PruneListBTree {
 			path: Some(file_path),
@@ -111,6 +108,7 @@ impl PruneListBTree {
 	pub fn flush(&mut self) -> io::Result<()> {
 		if let Some(ref path) = self.path {
 			save_via_temp_file(path, ".tmp", |mut w| {
+				// TODO - Do we benefit from having a buffered writer here?
 				// let mut sink = BufWriter::new(w);
 				let mut writer = BinWriter::new(&mut w);
 				self.to_vec()
