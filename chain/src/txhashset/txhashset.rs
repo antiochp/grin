@@ -32,7 +32,7 @@ use crate::util::secp::pedersen::{Commitment, RangeProof};
 use crate::util::{file, secp_static, zip};
 use croaring::Bitmap;
 use grin_store;
-use grin_store::pmmr::{clean_files_by_prefix, PMMRBackend, PMMR_FILES};
+use grin_store::pmmr::{clean_files_by_prefix, PMMRBackend, PruneBehavior, PMMR_FILES};
 use std::collections::HashSet;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
@@ -61,7 +61,8 @@ impl<T: PMMRable> PMMRHandle<T> {
 		root_dir: &str,
 		sub_dir: &str,
 		file_name: &str,
-		prunable: bool,
+		hash_prune: PruneBehavior,
+		data_prune: PruneBehavior,
 		fixed_size: bool,
 		header: Option<&BlockHeader>,
 	) -> Result<PMMRHandle<T>, Error> {
@@ -70,7 +71,13 @@ impl<T: PMMRable> PMMRHandle<T> {
 		let path_str = path.to_str().ok_or(Error::from(ErrorKind::Other(
 			"invalid file path".to_owned(),
 		)))?;
-		let backend = PMMRBackend::new(path_str.to_string(), prunable, fixed_size, header)?;
+		let backend = PMMRBackend::new(
+			path_str.to_string(),
+			hash_prune,
+			data_prune,
+			fixed_size,
+			header,
+		)?;
 		let last_pos = backend.unpruned_size();
 		Ok(PMMRHandle { backend, last_pos })
 	}
@@ -121,7 +128,8 @@ impl TxHashSet {
 				&root_dir,
 				HEADERHASHSET_SUBDIR,
 				HEADER_HEAD_SUBDIR,
-				false,
+				PruneBehavior::None,
+				PruneBehavior::None,
 				true,
 				None,
 			)?,
@@ -129,7 +137,8 @@ impl TxHashSet {
 				&root_dir,
 				HEADERHASHSET_SUBDIR,
 				SYNC_HEAD_SUBDIR,
-				false,
+				PruneBehavior::None,
+				PruneBehavior::None,
 				true,
 				None,
 			)?,
@@ -137,7 +146,8 @@ impl TxHashSet {
 				&root_dir,
 				TXHASHSET_SUBDIR,
 				OUTPUT_SUBDIR,
-				true,
+				PruneBehavior::Removed,
+				PruneBehavior::Removed,
 				true,
 				header,
 			)?,
@@ -145,7 +155,8 @@ impl TxHashSet {
 				&root_dir,
 				TXHASHSET_SUBDIR,
 				RANGE_PROOF_SUBDIR,
-				true,
+				PruneBehavior::Removed,
+				PruneBehavior::Removed,
 				true,
 				header,
 			)?,
@@ -153,7 +164,8 @@ impl TxHashSet {
 				&root_dir,
 				TXHASHSET_SUBDIR,
 				KERNEL_SUBDIR,
-				false, // not prunable
+				PruneBehavior::None,
+				PruneBehavior::None,
 				false, // variable size kernel data file
 				None,
 			)?,

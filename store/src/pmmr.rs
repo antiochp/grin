@@ -41,6 +41,12 @@ pub const PMMR_FILES: [&str; 4] = [
 	PMMR_PRUN_FILE,
 ];
 
+pub enum PruneBehavior {
+	None,
+	Removed,
+	Auto,
+}
+
 /// PMMR persistent backend implementation. Relies on multiple facilities to
 /// handle writing, reading and pruning.
 ///
@@ -54,7 +60,8 @@ pub const PMMR_FILES: [&str; 4] = [
 /// MMR.
 pub struct PMMRBackend<T: PMMRable> {
 	data_dir: PathBuf,
-	prunable: bool,
+	hash_prune: PruneBehavior,
+	data_prune: PruneBehavior,
 	hash_file: DataFile<Hash>,
 	data_file: DataFile<T::E>,
 	leaf_set: LeafSet,
@@ -77,7 +84,7 @@ impl<T: PMMRable> Backend<T> for PMMRBackend<T> {
 				.map_err(|e| format!("Failed to append hash to file. {}", e))?;
 		}
 
-		if self.prunable {
+		if self.is_data_pruneable() {
 			// (Re)calculate the latest pos given updated size of data file
 			// and the total leaf_shift, and add to our leaf_set.
 			let pos = pmmr::insertion_to_pmmr_index(size + self.prune_list.get_total_leaf_shift());
@@ -111,9 +118,12 @@ impl<T: PMMRable> Backend<T> for PMMRBackend<T> {
 	/// Return None if pos is a leaf and it has been removed (or pruned or
 	/// compacted).
 	fn get_hash(&self, pos: u64) -> Option<(Hash)> {
-		if self.prunable && pmmr::is_leaf(pos) && !self.leaf_set.includes(pos) {
-			return None;
+		if self.is_data_pruneable() {
+			if pmmr::is_leaf(pos) && !self.leaf_set.includes(pos) {
+				return None;
+			}
 		}
+
 		self.get_from_file(pos)
 	}
 
@@ -123,9 +133,13 @@ impl<T: PMMRable> Backend<T> for PMMRBackend<T> {
 		if !pmmr::is_leaf(pos) {
 			return None;
 		}
-		if self.prunable && !self.leaf_set.includes(pos) {
-			return None;
+
+		if self.is_data_pruneable() {
+			if !self.leaf_set.includes(pos) {
+				return None;
+			}
 		}
+
 		self.get_data_from_file(pos)
 	}
 
@@ -133,7 +147,7 @@ impl<T: PMMRable> Backend<T> for PMMRBackend<T> {
 	/// for a prunable PMMR this is an iterator over the leaf_set bitmap.
 	/// For a non-prunable PMMR this is *all* leaves (this is not yet implemented).
 	fn leaf_pos_iter(&self) -> Box<Iterator<Item = u64> + '_> {
-		if self.prunable {
+		if self.is_data_pruneable() {
 			Box::new(self.leaf_set.iter())
 		} else {
 			panic!("leaf_pos_iter not implemented for non-prunable PMMR")
@@ -149,7 +163,7 @@ impl<T: PMMRable> Backend<T> for PMMRBackend<T> {
 	/// Rewind the PMMR backend to the given position.
 	fn rewind(&mut self, position: u64, rewind_rm_pos: &Bitmap) -> Result<(), String> {
 		// First rewind the leaf_set with the necessary added and removed positions.
-		if self.prunable {
+		if self.is_data_pruneable() {
 			self.leaf_set.rewind(position, rewind_rm_pos);
 		}
 
@@ -167,7 +181,7 @@ impl<T: PMMRable> Backend<T> for PMMRBackend<T> {
 
 	/// Remove by insertion position.
 	fn remove(&mut self, pos: u64) -> Result<(), String> {
-		assert!(self.prunable, "Remove on non-prunable MMR");
+		assert!(self.is_data_pruneable(), "Remove on non-prunable MMR");
 		self.leaf_set.remove(pos);
 		Ok(())
 	}
@@ -202,7 +216,8 @@ impl<T: PMMRable> PMMRBackend<T> {
 	/// Use the provided dir to store its files.
 	pub fn new<P: AsRef<Path>>(
 		data_dir: P,
-		prunable: bool,
+		hash_prune: PruneBehavior,
+		data_prune: PruneBehavior,
 		fixed_size: bool,
 		header: Option<&BlockHeader>,
 	) -> io::Result<PMMRBackend<T>> {
@@ -243,12 +258,21 @@ impl<T: PMMRable> PMMRBackend<T> {
 
 		Ok(PMMRBackend {
 			data_dir: data_dir.to_path_buf(),
-			prunable,
+			hash_prune,
+			data_prune,
 			hash_file,
 			data_file,
 			leaf_set,
 			prune_list,
 		})
+	}
+
+	// TODO - What about "Auto" here for data prune behaviour? If/when we support it...
+	fn is_data_pruneable(&self) -> bool {
+		match self.data_prune {
+			PruneBehavior::Removed => true,
+			_ => false,
+		}
 	}
 
 	fn is_pruned(&self, pos: u64) -> bool {
@@ -298,7 +322,7 @@ impl<T: PMMRable> PMMRBackend<T> {
 
 	// Sync the leaf_set if this is a prunable backend.
 	fn sync_leaf_set(&mut self) -> io::Result<()> {
-		if !self.prunable {
+		if !self.is_data_pruneable() {
 			return Ok(());
 		}
 		self.leaf_set.flush()
@@ -321,11 +345,15 @@ impl<T: PMMRable> PMMRBackend<T> {
 	/// will have a suitable output_pos. This is used to enforce a horizon
 	/// after which the local node should have all the data to allow rewinding.
 	pub fn check_compact(&mut self, cutoff_pos: u64, rewind_rm_pos: &Bitmap) -> io::Result<bool> {
-		assert!(self.prunable, "Trying to compact a non-prunable PMMR");
+		assert!(
+			self.is_data_pruneable(),
+			"Trying to compact a non-prunable PMMR"
+		);
 
 		// Calculate the sets of leaf positions and node positions to remove based
 		// on the cutoff_pos provided.
-		let (leaves_removed, pos_to_rm) = self.pos_to_rm(cutoff_pos, rewind_rm_pos);
+		let leaves_removed = self.leaf_pos_to_rm(cutoff_pos, rewind_rm_pos);
+		let pos_to_rm = self.pos_to_rm(&leaves_removed);
 
 		// 1. Save compact copy of the hash file, skipping removed data.
 		{
@@ -378,12 +406,13 @@ impl<T: PMMRable> PMMRBackend<T> {
 		clean_files_by_prefix(data_dir, &pattern, REWIND_FILE_CLEANUP_DURATION_SECONDS)
 	}
 
-	fn pos_to_rm(&self, cutoff_pos: u64, rewind_rm_pos: &Bitmap) -> (Bitmap, Bitmap) {
-		let mut expanded = Bitmap::create();
+	fn leaf_pos_to_rm(&self, cutoff_pos: u64, rewind_rm_pos: &Bitmap) -> Bitmap {
+		self.leaf_set
+			.removed_pre_cutoff(cutoff_pos, rewind_rm_pos, &self.prune_list)
+	}
 
-		let leaf_pos_to_rm =
-			self.leaf_set
-				.removed_pre_cutoff(cutoff_pos, rewind_rm_pos, &self.prune_list);
+	fn pos_to_rm(&self, leaf_pos_to_rm: &Bitmap) -> Bitmap {
+		let mut expanded = Bitmap::create();
 
 		for x in leaf_pos_to_rm.iter() {
 			expanded.add(x);
@@ -407,7 +436,7 @@ impl<T: PMMRable> PMMRBackend<T> {
 				}
 			}
 		}
-		(leaf_pos_to_rm, removed_excl_roots(&expanded))
+		removed_excl_roots(&expanded)
 	}
 }
 
