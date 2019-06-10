@@ -24,7 +24,6 @@ use self::core::core::{transaction, Block, BlockHeader, Transaction, Weighting};
 use self::util::RwLock;
 use crate::pool::Pool;
 use crate::types::{BlockChain, PoolAdapter, PoolConfig, PoolEntry, PoolError, TxSource};
-use chrono::prelude::*;
 use grin_core as core;
 use grin_util as util;
 use std::collections::VecDeque;
@@ -157,11 +156,8 @@ impl TransactionPool {
 		// Check coinbase maturity before we go any further.
 		self.blockchain.verify_coinbase_maturity(&tx)?;
 
-		let entry = PoolEntry {
-			src,
-			tx_at: Utc::now(),
-			tx,
-		};
+		let tx_at = header.height;
+		let entry = PoolEntry { src, tx_at, tx };
 
 		// If not stem then we are fluff.
 		// If this is a stem tx then attempt to stem.
@@ -208,7 +204,7 @@ impl TransactionPool {
 	}
 
 	// Old txs will "age out" after 30 mins.
-	pub fn truncate_reorg_cache(&mut self, cutoff: DateTime<Utc>) {
+	pub fn truncate_reorg_cache(&mut self, cutoff: u64) {
 		let mut cache = self.reorg_cache.write();
 
 		while cache.front().map(|x| x.tx_at < cutoff).unwrap_or(false) {

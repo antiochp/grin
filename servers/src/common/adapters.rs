@@ -37,10 +37,8 @@ use crate::core::{core, global};
 use crate::p2p;
 use crate::p2p::types::PeerInfo;
 use crate::pool;
-use crate::pool::types::DandelionConfig;
 use crate::util::OneTime;
 use chrono::prelude::*;
-use chrono::Duration;
 use rand::prelude::*;
 
 /// Implementation of the NetAdapter for the . Gets notified when new
@@ -737,7 +735,7 @@ impl ChainAdapter for ChainToPoolAndNetAdapter {
 			let _ = tx_pool.reconcile_block(b);
 
 			// First "age out" any old txs in the reorg_cache.
-			let cutoff = Utc::now() - Duration::minutes(30);
+			let cutoff = b.header.height.saturating_sub(30);
 			tx_pool.truncate_reorg_cache(cutoff);
 		}
 
@@ -845,10 +843,10 @@ impl pool::PoolAdapter for PoolToNetAdapter {
 
 impl PoolToNetAdapter {
 	/// Create a new pool to net adapter
-	pub fn new(config: DandelionConfig) -> PoolToNetAdapter {
+	pub fn new(dandelion_epoch: Arc<RwLock<DandelionEpoch>>) -> PoolToNetAdapter {
 		PoolToNetAdapter {
 			peers: OneTime::new(),
-			dandelion_epoch: Arc::new(RwLock::new(DandelionEpoch::new(config))),
+			dandelion_epoch,
 		}
 	}
 

@@ -36,7 +36,9 @@ use crate::common::adapters::{
 };
 use crate::common::hooks::{init_chain_hooks, init_net_hooks};
 use crate::common::stats::{DiffBlock, DiffStats, PeerStats, ServerStateInfo, ServerStats};
-use crate::common::types::{Error, ServerConfig, StratumServerConfig, SyncState, SyncStatus};
+use crate::common::types::{
+	DandelionEpoch, Error, ServerConfig, StratumServerConfig, SyncState, SyncStatus,
+};
 use crate::core::core::hash::{Hashed, ZERO_HASH};
 use crate::core::core::verifier_cache::{LruVerifierCache, VerifierCache};
 use crate::core::{consensus, genesis, global, pow};
@@ -155,8 +157,13 @@ impl Server {
 		// We cache rangeproof verification and kernel signature verification.
 		let verifier_cache = Arc::new(RwLock::new(LruVerifierCache::new()));
 
+		// Our global Dandelion "epoch".
+		let dandelion_epoch = Arc::new(RwLock::new(DandelionEpoch::new(
+			config.dandelion_config.clone(),
+		)));
+
 		let pool_adapter = Arc::new(PoolToChainAdapter::new());
-		let pool_net_adapter = Arc::new(PoolToNetAdapter::new(config.dandelion_config.clone()));
+		let pool_net_adapter = Arc::new(PoolToNetAdapter::new(dandelion_epoch.clone()));
 		let tx_pool = Arc::new(RwLock::new(pool::TransactionPool::new(
 			config.pool_config.clone(),
 			pool_adapter.clone(),
@@ -189,7 +196,9 @@ impl Server {
 			archive_mode,
 		)?);
 
+		// Set our "one time" chain refs now that we have a chain.
 		pool_adapter.set_chain(shared_chain.clone());
+		dandelion_epoch.write().set_chain(shared_chain.clone());
 
 		let net_adapter = Arc::new(NetToChainAdapter::new(
 			sync_state.clone(),

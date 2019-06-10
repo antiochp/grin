@@ -14,7 +14,7 @@
 
 //! Server types
 use std::convert::From;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use chrono::prelude::{DateTime, Utc};
 use rand::prelude::*;
@@ -28,7 +28,7 @@ use crate::p2p;
 use crate::pool;
 use crate::pool::types::DandelionConfig;
 use crate::store;
-use crate::util::RwLock;
+use crate::util::{OneTime, RwLock};
 
 /// Error type wrapping underlying module errors.
 #[derive(Debug)]
@@ -468,11 +468,11 @@ impl chain::TxHashsetWriteStatus for SyncState {
 
 /// A node is either "stem" of "fluff" for the duration of a single epoch.
 /// A node also maintains an outbound relay peer for the epoch.
-#[derive(Debug)]
 pub struct DandelionEpoch {
 	config: DandelionConfig,
+	chain: OneTime<Weak<chain::Chain>>,
 	// When did this epoch start?
-	start_time: Option<i64>,
+	start_height: u64,
 	// Are we in "stem" mode or "fluff" mode for this epoch?
 	is_stem: bool,
 	// Our current Dandelion relay peer (effective for this epoch).
@@ -484,29 +484,53 @@ impl DandelionEpoch {
 	pub fn new(config: DandelionConfig) -> DandelionEpoch {
 		DandelionEpoch {
 			config,
-			start_time: None,
+			chain: OneTime::new(),
+			start_height: 0,
 			is_stem: true,
 			relay_peer: None,
 		}
 	}
 
+	/// Set the pool adapter's chain. Should only be called once.
+	pub fn set_chain(&self, chain: Arc<chain::Chain>) {
+		self.chain.init(Arc::downgrade(&chain));
+	}
+
+	fn chain(&self) -> Arc<chain::Chain> {
+		self.chain
+			.borrow()
+			.upgrade()
+			.expect("Failed to upgrade the weak ref to our chain.")
+	}
+
 	/// Is the current Dandelion epoch expired?
 	/// It is expired if start_time is older than the configured epoch_secs.
 	pub fn is_expired(&self) -> bool {
-		match self.start_time {
-			None => true,
-			Some(start_time) => {
-				let epoch_secs = self.config.epoch_secs.expect("epoch_secs config missing") as i64;
-				Utc::now().timestamp().saturating_sub(start_time) > epoch_secs
-			}
+		if self.start_height == 0 {
+			return true;
 		}
+
+		// TODO - config for epoch length
+		let header = self.chain().head().expect("head missing");
+		let epoch_length = 10;
+		header.height.saturating_sub(self.start_height) > epoch_length
+
+		// match self.start_height {
+		// 	None => true,
+		// 	Some(start_time) => {
+		// 		let epoch_secs = self.config.epoch_secs.expect("epoch_secs config missing") as i64;
+		// 		Utc::now().timestamp().saturating_sub(start_time) > epoch_secs
+		// 	}
+		// }
 	}
 
 	/// Transition to next Dandelion epoch.
 	/// Select stem/fluff based on configured stem_probability.
 	/// Choose a new outbound stem relay peer.
 	pub fn next_epoch(&mut self, peers: &Arc<p2p::Peers>) {
-		self.start_time = Some(Utc::now().timestamp());
+		let header = self.chain().head().expect("head missing");
+		self.start_height = header.height;
+
 		self.relay_peer = peers.outgoing_connected_peers().first().cloned();
 
 		// If stem_probability == 90 then we stem 90% of the time.

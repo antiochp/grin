@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::prelude::Utc;
-use rand::{thread_rng, Rng};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -90,11 +88,10 @@ pub fn monitor_transactions(
 
 // Query the pool for transactions older than the cutoff.
 // Used for both periodic fluffing and handling expired embargo timer.
-fn select_txs_cutoff(pool: &Pool, cutoff_secs: u16) -> Vec<PoolEntry> {
-	let cutoff = Utc::now().timestamp() - cutoff_secs as i64;
+fn select_txs_cutoff(pool: &Pool, cutoff_height: u64) -> Vec<PoolEntry> {
 	pool.entries
 		.iter()
-		.filter(|x| x.tx_at.timestamp() < cutoff)
+		.filter(|x| x.tx_at < cutoff_height)
 		.cloned()
 		.collect()
 }
@@ -113,10 +110,15 @@ fn process_fluff_phase(
 		return Ok(());
 	}
 
-	let cutoff_secs = dandelion_config
-		.aggregation_secs
-		.expect("aggregation secs config missing");
-	let cutoff_entries = select_txs_cutoff(&tx_pool.stempool, cutoff_secs);
+	let header = tx_pool.chain_head()?;
+
+	// let cutoff_secs = dandelion_config
+	// 	.aggregation_secs
+	// 	.expect("aggregation secs config missing");
+
+	let cutoff_height = header.height.saturating_sub(1);
+
+	let cutoff_entries = select_txs_cutoff(&tx_pool.stempool, cutoff_height);
 
 	// If epoch is expired, fluff *all* outstanding entries in stempool.
 	// If *any* entry older than aggregation_secs (30s) then fluff *all* entries.
@@ -124,8 +126,6 @@ fn process_fluff_phase(
 	if !adapter.is_expired() && cutoff_entries.is_empty() {
 		return Ok(());
 	}
-
-	let header = tx_pool.chain_head()?;
 
 	let fluffable_txs = {
 		let txpool_tx = tx_pool.txpool.all_transactions_aggregate()?;
@@ -165,19 +165,22 @@ fn process_expired_entries(
 	// Take a write lock on the txpool for the duration of this processing.
 	let mut tx_pool = tx_pool.write();
 
-	let embargo_secs = dandelion_config
-		.embargo_secs
-		.expect("embargo_secs config missing")
-		+ thread_rng().gen_range(0, 31);
-	let expired_entries = select_txs_cutoff(&tx_pool.stempool, embargo_secs);
+	let header = tx_pool.chain_head()?;
+
+	// let embargo_secs = dandelion_config
+	// 	.embargo_secs
+	// 	.expect("embargo_secs config missing")
+	// 	+ thread_rng().gen_range(0, 31);
+
+	let embargo_height = header.height.saturating_sub(3);
+
+	let expired_entries = select_txs_cutoff(&tx_pool.stempool, embargo_height);
 
 	if expired_entries.is_empty() {
 		return Ok(());
 	}
 
 	debug!("dand_mon: Found {} expired txs.", expired_entries.len());
-
-	let header = tx_pool.chain_head()?;
 
 	let src = TxSource {
 		debug_name: "embargo_expired".to_string(),

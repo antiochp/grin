@@ -15,8 +15,6 @@
 //! The primary module containing the implementations of the transaction pool
 //! and its top-level members.
 
-use chrono::prelude::{DateTime, Utc};
-
 use self::core::core::block;
 use self::core::core::committed;
 use self::core::core::hash::Hash;
@@ -139,8 +137,8 @@ fn default_mineable_max_weight() -> usize {
 pub struct PoolEntry {
 	/// Info on where this tx originated from.
 	pub src: TxSource,
-	/// Timestamp of when this tx was originally added to the pool.
-	pub tx_at: DateTime<Utc>,
+	/// Block height when this tx was originally added to the pool.
+	pub tx_at: u64,
 	/// The transaction itself.
 	pub tx: Transaction,
 }
