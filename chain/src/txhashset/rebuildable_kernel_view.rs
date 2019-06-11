@@ -25,6 +25,7 @@ use croaring::Bitmap;
 use tempfile;
 use tempfile::TempDir;
 
+use crate::core::core::hash::Hashed;
 use crate::core::core::pmmr::{self, PMMR};
 use crate::core::core::{BlockHeader, TxKernel, TxKernelEntry};
 use crate::core::ser::{Readable, StreamingReader};
@@ -84,15 +85,8 @@ impl<'a> RebuildableKernelView<'a> {
 				current_pos = last_pos;
 			}
 
-			// Verify the kernel MMR root is correct for current header.
-			let root = self.pmmr.root();
-			if root != current_header.kernel_root {
-				return Err(ErrorKind::InvalidTxHashSet(format!(
-					"Kernel root at {} does not match",
-					current_header.height
-				))
-				.into());
-			}
+			// Validate the kernel MMR root against the current header.
+			self.validate_root(&current_header)?;
 
 			// Periodically sync the PMMR backend as we rebuild it.
 			if current_header.height % 1000 == 0 {
@@ -134,6 +128,19 @@ impl<'a> RebuildableKernelView<'a> {
 			self.pmmr.last_pos,
 		);
 
+		Ok(())
+	}
+
+	fn validate_root(&self, header: &BlockHeader) -> Result<(), Error> {
+		let root = self.pmmr.root();
+		if root != header.kernel_root {
+			return Err(ErrorKind::InvalidTxHashSet(format!(
+				"Kernel root for header {} (height: {}) does not match.",
+				header.hash(),
+				header.height,
+			))
+			.into());
+		}
 		Ok(())
 	}
 

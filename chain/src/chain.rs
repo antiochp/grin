@@ -642,10 +642,8 @@ impl Chain {
 	}
 
 	pub fn kernel_data_write(&self, reader: &mut Read) -> Result<(), Error> {
-		// TODO - This works for now as we already have a full set of blocks available.
-		// We will be doing this *before* we have a full chain and will need to leverage
-		// the header chain.
-		let header = self.head_header()?;
+		let tip = self.header_head()?;
+		let header = self.get_block_header(&tip.last_block_h)?;
 
 		let txhashset = self.txhashset.read();
 		txhashset::rebuildable_kernel_view(&txhashset, |view| view.rebuild(reader, &header))
