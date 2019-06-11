@@ -177,7 +177,9 @@ where
 
 	/// Push a new element into the MMR. Computes new related peaks at
 	/// the same time if applicable.
-	pub fn push(&mut self, elmt: &T) -> Result<u64, String> {
+	/// Returns the pos of the new element and the "last_pos"
+	/// accounting for any added parent pos.
+	pub fn push(&mut self, elmt: &T) -> Result<(u64, u64), String> {
 		let elmt_pos = self.last_pos + 1;
 		let mut current_hash = elmt.hash_with_index(elmt_pos - 1);
 
@@ -205,7 +207,10 @@ where
 		// append all the new nodes and update the MMR index
 		self.backend.append(elmt, hashes)?;
 		self.last_pos = pos;
-		Ok(elmt_pos)
+
+		// Now return the pos of the new element and the updated last_pos
+		// accouting for any added parent pos.
+		Ok((elmt_pos, self.last_pos))
 	}
 
 	/// Saves a snapshot of the MMR tagged with the block hash.
@@ -213,6 +218,11 @@ where
 	/// sending the txhashset zip file to another node for fast-sync.
 	pub fn snapshot(&mut self, header: &BlockHeader) -> Result<(), String> {
 		self.backend.snapshot(header)?;
+		Ok(())
+	}
+
+	pub fn sync(&mut self) -> Result<(), String> {
+		self.backend.sync()?;
 		Ok(())
 	}
 

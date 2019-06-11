@@ -263,3 +263,19 @@ impl From<secp::Error> for Error {
 		}
 	}
 }
+
+impl From<ser::Error> for Error {
+	fn from(error: ser::Error) -> Error {
+		Error {
+			inner: Context::new(ErrorKind::SerErr(error)),
+		}
+	}
+}
+
+impl From<String> for Error {
+	fn from(error: String) -> Error {
+		Error {
+			inner: Context::new(ErrorKind::Other(error)),
+		}
+	}
+}

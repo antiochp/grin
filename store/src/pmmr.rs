@@ -185,6 +185,16 @@ impl<T: PMMRable> Backend<T> for PMMRBackend<T> {
 		Ok(())
 	}
 
+	/// Syncs all files to disk. A call to sync is required to ensure all the
+	/// data has been successfully written to disk.
+	fn sync(&mut self) -> Result<(), String> {
+		Ok(())
+			.and(self.hash_file.flush())
+			.and(self.data_file.flush())
+			.and(self.sync_leaf_set())
+			.map_err(|e| format!("Could not sync pmmr to disk: {:?}", e))
+	}
+
 	fn dump_stats(&self) {
 		debug!(
 			"pmmr backend: unpruned: {}, hashes: {}, data: {}, leaf_set: {}, prune_list: {}",
@@ -279,21 +289,6 @@ impl<T: PMMRable> PMMRBackend<T> {
 	/// and compaction.
 	pub fn hash_size(&self) -> u64 {
 		self.hash_file.size()
-	}
-
-	/// Syncs all files to disk. A call to sync is required to ensure all the
-	/// data has been successfully written to disk.
-	pub fn sync(&mut self) -> io::Result<()> {
-		Ok(())
-			.and(self.hash_file.flush())
-			.and(self.data_file.flush())
-			.and(self.sync_leaf_set())
-			.map_err(|e| {
-				io::Error::new(
-					io::ErrorKind::Interrupted,
-					format!("Could not sync pmmr to disk: {:?}", e),
-				)
-			})
 	}
 
 	// Sync the leaf_set if this is a prunable backend.

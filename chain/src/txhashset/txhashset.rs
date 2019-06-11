@@ -51,7 +51,7 @@ const KERNEL_SUBDIR: &'static str = "kernel";
 
 const TXHASHSET_ZIP: &'static str = "txhashset_snapshot";
 
-struct PMMRHandle<T: PMMRable> {
+pub struct PMMRHandle<T: PMMRable> {
 	backend: PMMRBackend<T>,
 	last_pos: u64,
 }
@@ -928,13 +928,13 @@ impl<'a> Extension<'a> {
 			}
 		}
 		// push the new output to the MMR.
-		let output_pos = self
+		let (output_pos, _) = self
 			.output_pmmr
 			.push(out)
 			.map_err(&ErrorKind::TxHashSetErr)?;
 
 		// push the rangeproof to the MMR.
-		let rproof_pos = self
+		let (rproof_pos, _) = self
 			.rproof_pmmr
 			.push(&out.proof)
 			.map_err(&ErrorKind::TxHashSetErr)?;
