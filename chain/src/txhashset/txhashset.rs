@@ -26,7 +26,7 @@ use crate::core::global;
 use crate::core::ser::{PMMRIndexHashable, PMMRable};
 use crate::error::{Error, ErrorKind};
 use crate::store::{Batch, ChainStore};
-use crate::txhashset::{RewindableKernelView, UTXOView};
+use crate::txhashset::{RebuildableKernelView, RewindableKernelView, UTXOView};
 use crate::types::{Tip, TxHashSetRoots, TxHashsetWriteStatus};
 use crate::util::secp::pedersen::{Commitment, RangeProof};
 use crate::util::{file, secp_static, zip};
@@ -405,6 +405,21 @@ where
 		let batch = trees.commit_index.batch()?;
 		let header = batch.head_header()?;
 		let mut view = RewindableKernelView::new(kernel_pmmr, &batch, header);
+		res = inner(&mut view);
+	}
+	res
+}
+
+pub fn rebuildable_kernel_view<F, T>(trees: &TxHashSet, inner: F) -> Result<T, Error>
+where
+	F: FnOnce(&mut RebuildableKernelView<'_>) -> Result<T, Error>,
+{
+	let res: Result<T, Error>;
+	{
+		let tempdir = tempfile::tempdir()?;
+		let mut backend: PMMRBackend<TxKernel> =
+			PMMRBackend::new(tempdir.path(), false, false, None)?;
+		let mut view = RebuildableKernelView::new(&mut backend, &trees);
 		res = inner(&mut view);
 	}
 	res

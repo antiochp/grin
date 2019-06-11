@@ -359,7 +359,7 @@ impl p2p::ChainAdapter for NetToChainAdapter {
 	/// the required indexes for a consumer to rewind to a consistent state
 	/// at the provided block hash.
 	fn txhashset_read(&self, h: Hash) -> Option<p2p::TxHashSetRead> {
-		match self.chain().txhashset_read(h.clone()) {
+		match self.chain().txhashset_read(h) {
 			Ok((out_index, kernel_index, read)) => Some(p2p::TxHashSetRead {
 				output_index: out_index,
 				kernel_index: kernel_index,

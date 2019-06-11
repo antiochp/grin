@@ -641,20 +641,14 @@ impl Chain {
 		txhashset::rewindable_kernel_view(&txhashset, |view| view.kernel_data_read())
 	}
 
-	/// Writes kernels provided to us (via a kernel data download).
-	/// Currently does not write these to disk and simply deserializes
-	/// the provided data.
-	/// TODO - Write this data to disk and validate the rebuilt kernel MMR.
 	pub fn kernel_data_write(&self, reader: &mut Read) -> Result<(), Error> {
-		let mut count = 0;
-		let mut stream = StreamingReader::new(reader, Duration::from_secs(1));
-		while let Ok(_kernel) = TxKernelEntry::read(&mut stream) {
-			count += 1;
-		}
+		// TODO - This works for now as we already have a full set of blocks available.
+		// We will be doing this *before* we have a full chain and will need to leverage
+		// the header chain.
+		let header = self.head_header()?;
 
-		debug!("kernel_data_write: read {} kernels", count);
-
-		Ok(())
+		let txhashset = self.txhashset.read();
+		txhashset::rebuildable_kernel_view(&txhashset, |view| view.rebuild(reader, &header))
 	}
 
 	/// Provides a reading view into the current txhashset state as well as

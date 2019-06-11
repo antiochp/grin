@@ -33,19 +33,30 @@ use crate::store::Batch;
 use crate::txhashset::txhashset::{PMMRHandle, TxHashSet};
 use grin_store::pmmr::PMMRBackend;
 
-/// Rebuildable kernel view backed by a tempdir.
+/// A "rebuildable" kernel view.
+/// Note: We have a reference to an existing txhashset.
+/// We use this existing txhashset to access an existing set of headers.
+/// We do not write to this existing txhashset, only to the backend of this kernel view.
+///
+/// TODO - Would it make more sense to write the headers into this view so we can access them directly?
+///
 pub struct RebuildableKernelView<'a> {
 	pmmr: PMMR<'a, TxKernel, PMMRBackend<TxKernel>>,
+	txhashset: &'a TxHashSet,
 }
 
 impl<'a> RebuildableKernelView<'a> {
-	pub fn new(backend: &'a mut PMMRBackend<TxKernel>) -> RebuildableKernelView<'a> {
+	pub fn new(
+		backend: &'a mut PMMRBackend<TxKernel>,
+		txhashset: &'a TxHashSet,
+	) -> RebuildableKernelView<'a> {
 		RebuildableKernelView {
 			pmmr: PMMR::at(backend, 0),
+			txhashset,
 		}
 	}
 
-	pub fn truncate(&mut self) -> Result<(), Error> {
+	fn truncate(&mut self) -> Result<(), Error> {
 		debug!("Truncating temp kernel view.");
 		self.pmmr
 			.rewind(0, &Bitmap::create())
@@ -53,28 +64,23 @@ impl<'a> RebuildableKernelView<'a> {
 		Ok(())
 	}
 
-	pub fn rebuild(
-		&mut self,
-		data: &mut Read,
-		txhashset: &TxHashSet,
-		header: &BlockHeader,
-	) -> Result<(), Error> {
+	pub fn rebuild(&mut self, data: &mut Read, header: &BlockHeader) -> Result<(), Error> {
 		// Rebuild is all-or-nothing. Truncate everything before we begin.
 		self.truncate()?;
 
 		let mut stream = StreamingReader::new(data, Duration::from_secs(1));
 
 		let mut current_pos = 0;
-		let mut current_header = txhashset.get_header_by_height(0)?;
+		let mut current_header = self.txhashset.get_header_by_height(0)?;
 
 		loop {
 			while current_pos < current_header.kernel_mmr_size {
 				// Read and verify the next kernel from the stream of data.
-				let kernel = TxKernelEntry::read(&mut stream)?;
-				kernel.kernel.verify()?;
+				let kernel: TxKernel = TxKernelEntry::read(&mut stream)?.into();
+				kernel.verify()?;
 
 				// Apply it to the MMR and keep track of last_pos.
-				let (_, last_pos) = self.apply_kernel(&kernel.kernel)?;
+				let (_, last_pos) = self.apply_kernel(&kernel)?;
 				current_pos = last_pos;
 			}
 
@@ -94,7 +100,7 @@ impl<'a> RebuildableKernelView<'a> {
 					.sync()
 					.map_err(|_| ErrorKind::TxHashSetErr("failed to sync pmmr".into()))?;
 				debug!(
-					"Rebuilt kernel MMR to height: {}, kernels: {} (MMR size: {}) ...",
+					"Rebuilt to header height: {}, kernels: {} (MMR size: {}) ...",
 					current_header.height,
 					pmmr::n_leaves(self.pmmr.last_pos),
 					self.pmmr.last_pos,
@@ -110,16 +116,19 @@ impl<'a> RebuildableKernelView<'a> {
 				))
 				.into());
 			} else {
-				current_header = txhashset.get_header_by_height(current_header.height + 1)?;
+				current_header = self
+					.txhashset
+					.get_header_by_height(current_header.height + 1)?;
 			}
 		}
 
-		// One final sync to ensure everything is saved (to the tempdir).
+		// One final sync to ensure everything is saved to tempdir.
 		self.pmmr
 			.sync()
 			.map_err(|_| ErrorKind::TxHashSetErr("failed to sync pmmr".into()))?;
+
 		debug!(
-			"Rebuilt kernel MMR to height: {}, kernels: {} (MMR size: {}) DONE",
+			"Kernel MMR rebuilt, header height: {}, kernels: {} (MMR size: {})",
 			current_header.height,
 			pmmr::n_leaves(self.pmmr.last_pos),
 			self.pmmr.last_pos,

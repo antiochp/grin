@@ -26,6 +26,7 @@ use std::cmp;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::sync::Arc;
+use std::time::Instant;
 use tempfile::tempfile;
 
 pub struct Protocol {
@@ -266,9 +267,20 @@ impl MessageHandler for Protocol {
 				let total_size = response.bytes as usize;
 				let mut remaining_size = total_size;
 
+				let mut now = Instant::now();
 				while remaining_size > 0 {
-					let size = msg.copy_attachment(remaining_size, &mut writer)?;
+					let chunk = cmp::min(remaining_size, 48_000);
+					let size = msg.copy_attachment(chunk, &mut writer)?;
 					remaining_size = remaining_size.saturating_sub(size);
+
+					if now.elapsed().as_secs() > 5 {
+						debug!(
+							"kernel_data_response: {}/{} bytes",
+							total_size.saturating_sub(remaining_size),
+							total_size
+						);
+						now = Instant::now();
+					}
 
 					// Increase received bytes quietly (without affecting the counters).
 					// Otherwise we risk banning a peer as "abusive".

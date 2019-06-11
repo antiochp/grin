@@ -369,6 +369,12 @@ impl From<TxKernel> for TxKernelEntry {
 	}
 }
 
+impl From<TxKernelEntry> for TxKernel {
+	fn from(entry: TxKernelEntry) -> Self {
+		entry.kernel
+	}
+}
+
 impl FixedLength for TxKernelEntry {
 	const LEN: usize = 17 // features plus fee and lock_height
 		+ secp::constants::PEDERSEN_COMMITMENT_SIZE
