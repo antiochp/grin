@@ -417,9 +417,13 @@ where
 	let res: Result<T, Error>;
 	{
 		let tempdir = tempfile::tempdir()?;
-		let mut backend: PMMRBackend<TxKernel> =
+		let mut kernel_backend: PMMRBackend<TxKernel> =
 			PMMRBackend::new(tempdir.path(), false, false, None)?;
-		let mut view = RebuildableKernelView::new(&mut backend, &trees);
+		let kernel_pmmr = PMMR::at(&mut kernel_backend, 0);
+		let sync_head_pmmr =
+			ReadonlyPMMR::at(&trees.sync_pmmr_h.backend, trees.sync_pmmr_h.last_pos);
+		let batch = trees.commit_index.batch()?;
+		let mut view = RebuildableKernelView::new(kernel_pmmr, sync_head_pmmr, &batch);
 		res = inner(&mut view);
 	}
 	res

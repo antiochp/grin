@@ -37,7 +37,7 @@ use crate::util::RwLock;
 use grin_store::Error::NotFoundErr;
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{BufReader, Read};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -911,6 +911,22 @@ impl Chain {
 		txhashset::clean_txhashset_folder(&sandbox_dir);
 		txhashset::clean_header_folder(&sandbox_dir);
 		txhashset::zip_write(sandbox_dir.clone(), txhashset_data.try_clone()?, &header)?;
+
+		// TODO - At this point we have written the files in the zip out to the "sandbox".
+		// Open the kernel pmmr_data.bin file and do a kernel rebuild based on this.
+		{
+			let sync_txhashset = self.txhashset.read();
+			let mut kernel_path = sandbox_dir.clone();
+			kernel_path.push("txhashset/kernel/pmmr_data.bin");
+			let kernel_data = File::open(kernel_path)?;
+			let mut kernel_reader = BufReader::new(kernel_data);
+			txhashset::rebuildable_kernel_view(&sync_txhashset, |view| {
+				view.rebuild(&mut kernel_reader, &header)
+			})?;
+
+			// TODO - If this is all good then we can copy the rebuilt MMR files back
+			// into the sandbox and continue.
+		}
 
 		let mut txhashset = txhashset::TxHashSet::open(
 			sandbox_dir

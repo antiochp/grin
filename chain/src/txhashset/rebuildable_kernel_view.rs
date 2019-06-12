@@ -26,7 +26,7 @@ use tempfile;
 use tempfile::TempDir;
 
 use crate::core::core::hash::Hashed;
-use crate::core::core::pmmr::{self, PMMR};
+use crate::core::core::pmmr::{self, ReadonlyPMMR, PMMR};
 use crate::core::core::{BlockHeader, TxKernel, TxKernelEntry};
 use crate::core::ser::{Readable, StreamingReader};
 use crate::error::{Error, ErrorKind};
@@ -39,30 +39,42 @@ use grin_store::pmmr::PMMRBackend;
 /// We use this existing txhashset to access an existing set of headers.
 /// We do not write to this existing txhashset, only to the backend of this kernel view.
 ///
-/// TODO - Would it make more sense to write the headers into this view so we can access them directly?
-///
 pub struct RebuildableKernelView<'a> {
-	pmmr: PMMR<'a, TxKernel, PMMRBackend<TxKernel>>,
-	txhashset: &'a TxHashSet,
+	kernel_pmmr: PMMR<'a, TxKernel, PMMRBackend<TxKernel>>,
+	header_pmmr: ReadonlyPMMR<'a, BlockHeader, PMMRBackend<BlockHeader>>,
+	batch: &'a Batch<'a>,
 }
 
 impl<'a> RebuildableKernelView<'a> {
 	pub fn new(
-		backend: &'a mut PMMRBackend<TxKernel>,
-		txhashset: &'a TxHashSet,
+		kernel_pmmr: PMMR<'a, TxKernel, PMMRBackend<TxKernel>>,
+		header_pmmr: ReadonlyPMMR<'a, BlockHeader, PMMRBackend<BlockHeader>>,
+		batch: &'a Batch<'_>,
 	) -> RebuildableKernelView<'a> {
 		RebuildableKernelView {
-			pmmr: PMMR::at(backend, 0),
-			txhashset,
+			kernel_pmmr,
+			header_pmmr,
+			batch,
 		}
 	}
 
 	fn truncate(&mut self) -> Result<(), Error> {
 		debug!("Truncating temp kernel view.");
-		self.pmmr
+		self.kernel_pmmr
 			.rewind(0, &Bitmap::create())
 			.map_err(&ErrorKind::TxHashSetErr)?;
 		Ok(())
+	}
+
+	fn get_header_by_height(&self, height: u64) -> Result<BlockHeader, Error> {
+		let pos = pmmr::insertion_to_pmmr_index(height + 1);
+		if let Some(entry) = self.header_pmmr.get_data(pos) {
+			self.batch
+				.get_block_header(&entry.hash())
+				.map_err(|e| ErrorKind::StoreErr(e, "get_block_header".to_owned()).into())
+		} else {
+			return Err(ErrorKind::TxHashSetErr("get_data".to_owned()).into());
+		}
 	}
 
 	pub fn rebuild(&mut self, data: &mut Read, header: &BlockHeader) -> Result<(), Error> {
@@ -72,8 +84,7 @@ impl<'a> RebuildableKernelView<'a> {
 		let mut stream = StreamingReader::new(data, Duration::from_secs(1));
 
 		let mut current_pos = 0;
-		let mut current_header = self.txhashset.get_header_by_height(0)?;
-
+		let mut current_header = self.get_header_by_height(0)?;
 		loop {
 			while current_pos < current_header.kernel_mmr_size {
 				// Read and verify the next kernel from the stream of data.
@@ -90,14 +101,14 @@ impl<'a> RebuildableKernelView<'a> {
 
 			// Periodically sync the PMMR backend as we rebuild it.
 			if current_header.height % 1000 == 0 {
-				self.pmmr
+				self.kernel_pmmr
 					.sync()
 					.map_err(|_| ErrorKind::TxHashSetErr("failed to sync pmmr".into()))?;
 				debug!(
 					"Rebuilt to header height: {}, kernels: {} (MMR size: {}) ...",
 					current_header.height,
-					pmmr::n_leaves(self.pmmr.last_pos),
-					self.pmmr.last_pos,
+					pmmr::n_leaves(self.kernel_pmmr.last_pos),
+					self.kernel_pmmr.last_pos,
 				);
 			}
 
@@ -110,29 +121,27 @@ impl<'a> RebuildableKernelView<'a> {
 				))
 				.into());
 			} else {
-				current_header = self
-					.txhashset
-					.get_header_by_height(current_header.height + 1)?;
+				current_header = self.get_header_by_height(current_header.height + 1)?;
 			}
 		}
 
 		// One final sync to ensure everything is saved to tempdir.
-		self.pmmr
+		self.kernel_pmmr
 			.sync()
 			.map_err(|_| ErrorKind::TxHashSetErr("failed to sync pmmr".into()))?;
 
 		debug!(
 			"Kernel MMR rebuilt, header height: {}, kernels: {} (MMR size: {})",
 			current_header.height,
-			pmmr::n_leaves(self.pmmr.last_pos),
-			self.pmmr.last_pos,
+			pmmr::n_leaves(self.kernel_pmmr.last_pos),
+			self.kernel_pmmr.last_pos,
 		);
 
 		Ok(())
 	}
 
 	fn validate_root(&self, header: &BlockHeader) -> Result<(), Error> {
-		let root = self.pmmr.root();
+		let root = self.kernel_pmmr.root();
 		if root != header.kernel_root {
 			return Err(ErrorKind::InvalidTxHashSet(format!(
 				"Kernel root for header {} (height: {}) does not match.",
@@ -147,7 +156,10 @@ impl<'a> RebuildableKernelView<'a> {
 	/// Push kernel onto MMR (hash, data and size files).
 	/// Returns the pos of the element applies and "last_pos" including all new parents.
 	pub fn apply_kernel(&mut self, kernel: &TxKernel) -> Result<(u64, u64), Error> {
-		let pos = self.pmmr.push(kernel).map_err(&ErrorKind::TxHashSetErr)?;
+		let pos = self
+			.kernel_pmmr
+			.push(kernel)
+			.map_err(&ErrorKind::TxHashSetErr)?;
 		Ok(pos)
 	}
 }
