@@ -405,8 +405,7 @@ where
 		let tempdir = tempfile::tempdir()?;
 		let path = tempdir.path();
 
-		let mut kernel_backend: PMMRBackend<TxKernel> =
-			PMMRBackend::new(path, false, false, None)?;
+		let mut kernel_backend: PMMRBackend<TxKernel> = PMMRBackend::new(path, false, false, None)?;
 		let kernel_pmmr = PMMR::at(&mut kernel_backend, 0);
 		let sync_head_pmmr =
 			ReadonlyPMMR::at(&trees.sync_pmmr_h.backend, trees.sync_pmmr_h.last_pos);
