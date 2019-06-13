@@ -16,9 +16,9 @@
 //! Used when receiving a "kernel data" file from a peer to
 //! (re)build the kernel MMR locally.
 
-use std::fs::File;
-use std::io;
-use std::io::{BufReader, Read};
+use std::fs::{self, File};
+use std::io::{self, BufReader, Read};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use croaring::Bitmap;
@@ -43,6 +43,7 @@ pub struct RebuildableKernelView<'a> {
 	kernel_pmmr: PMMR<'a, TxKernel, PMMRBackend<TxKernel>>,
 	header_pmmr: ReadonlyPMMR<'a, BlockHeader, PMMRBackend<BlockHeader>>,
 	batch: &'a Batch<'a>,
+	path: &'a Path,
 }
 
 impl<'a> RebuildableKernelView<'a> {
@@ -50,11 +51,13 @@ impl<'a> RebuildableKernelView<'a> {
 		kernel_pmmr: PMMR<'a, TxKernel, PMMRBackend<TxKernel>>,
 		header_pmmr: ReadonlyPMMR<'a, BlockHeader, PMMRBackend<BlockHeader>>,
 		batch: &'a Batch<'_>,
+		path: &'a Path,
 	) -> RebuildableKernelView<'a> {
 		RebuildableKernelView {
 			kernel_pmmr,
 			header_pmmr,
 			batch,
+			path,
 		}
 	}
 
@@ -75,6 +78,15 @@ impl<'a> RebuildableKernelView<'a> {
 		} else {
 			return Err(ErrorKind::TxHashSetErr("get_data".to_owned()).into());
 		}
+	}
+
+	/// TODO - Cleaner to move this to backend?
+	pub fn copy_to_txhashset(&self, txhashset_path: PathBuf) -> Result<(), Error> {
+		let to_kernel_path = txhashset_path.join("kernel");
+		for file in &["pmmr_data.bin", "pmmr_hash.bin", "pmmr_size.bin"] {
+			fs::copy(self.path.join(file), to_kernel_path.join(file))?;
+		}
+		Ok(())
 	}
 
 	pub fn rebuild(&mut self, data: &mut Read, header: &BlockHeader) -> Result<(), Error> {

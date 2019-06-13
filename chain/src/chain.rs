@@ -637,8 +637,7 @@ impl Chain {
 
 	/// Provides a reading view into the current kernel state.
 	pub fn kernel_data_read(&self) -> Result<File, Error> {
-		let txhashset = self.txhashset.read();
-		txhashset::rewindable_kernel_view(&txhashset, |view| view.kernel_data_read())
+		self.txhashset.read().kernel_data_read()
 	}
 
 	pub fn kernel_data_write(&self, reader: &mut Read) -> Result<(), Error> {
@@ -696,38 +695,6 @@ impl Chain {
 		);
 
 		self.get_header_by_height(txhashset_height)
-	}
-
-	// Special handling to make sure the whole kernel set matches each of its
-	// roots in each block header, without truncation. We go back header by
-	// header, rewind and check each root. This fixes a potential weakness in
-	// fast sync where a reorg past the horizon could allow a whole rewrite of
-	// the kernel set.
-	fn validate_kernel_history(
-		&self,
-		header: &BlockHeader,
-		txhashset: &txhashset::TxHashSet,
-	) -> Result<(), Error> {
-		debug!("validate_kernel_history: rewinding and validating kernel history (readonly)");
-
-		let mut count = 0;
-		let mut current = header.clone();
-		txhashset::rewindable_kernel_view(&txhashset, |view| {
-			while current.height > 0 {
-				view.rewind(&current)?;
-				view.validate_root()?;
-				current = view.batch().get_previous_header(&current)?;
-				count += 1;
-			}
-			Ok(())
-		})?;
-
-		debug!(
-			"validate_kernel_history: validated kernel root on {} headers",
-			count,
-		);
-
-		Ok(())
 	}
 
 	/// Rebuild the sync MMR based on current header_head.
@@ -912,20 +879,20 @@ impl Chain {
 		txhashset::clean_header_folder(&sandbox_dir);
 		txhashset::zip_write(sandbox_dir.clone(), txhashset_data.try_clone()?, &header)?;
 
-		// TODO - At this point we have written the files in the zip out to the "sandbox".
-		// Open the kernel pmmr_data.bin file and do a kernel rebuild based on this.
+		// Rebuild (and fully validate) the kernel MMR.
+		// Validate all kernel signatures.
+		// Validate root of kernel MMR for each header.
 		{
-			let sync_txhashset = self.txhashset.read();
-			let mut kernel_path = sandbox_dir.clone();
-			kernel_path.push("txhashset/kernel/pmmr_data.bin");
-			let kernel_data = File::open(kernel_path)?;
+			let txhashset = self.txhashset.read();
+			let txhashset_path = sandbox_dir.join("txhashset");
+			let kernel_data_path: PathBuf = ["kernel", "pmmr_data.bin"].iter().collect();
+			let kernel_data = File::open(txhashset_path.join(kernel_data_path))?;
 			let mut kernel_reader = BufReader::new(kernel_data);
-			txhashset::rebuildable_kernel_view(&sync_txhashset, |view| {
-				view.rebuild(&mut kernel_reader, &header)
+			txhashset::rebuildable_kernel_view(&txhashset, |view| {
+				view.rebuild(&mut kernel_reader, &header)?;
+				view.copy_to_txhashset(txhashset_path)?;
+				Ok(())
 			})?;
-
-			// TODO - If this is all good then we can copy the rebuilt MMR files back
-			// into the sandbox and continue.
 		}
 
 		let mut txhashset = txhashset::TxHashSet::open(
@@ -939,10 +906,8 @@ impl Chain {
 
 		// The txhashset.zip contains the output, rangeproof and kernel MMRs.
 		// We must rebuild the header MMR ourselves based on the headers in our db.
+		// NOTE: We *do* have the sync header MMR available here (consider file copy here).
 		self.rebuild_header_mmr(&Tip::from_header(&header), &mut txhashset)?;
-
-		// Validate the full kernel history (kernel MMR root for every block header).
-		self.validate_kernel_history(&header, &txhashset)?;
 
 		// all good, prepare a new batch and update all the required records
 		debug!("txhashset_write: rewinding a 2nd time (writeable)");

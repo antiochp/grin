@@ -26,7 +26,7 @@ use crate::core::global;
 use crate::core::ser::{PMMRIndexHashable, PMMRable};
 use crate::error::{Error, ErrorKind};
 use crate::store::{Batch, ChainStore};
-use crate::txhashset::{RebuildableKernelView, RewindableKernelView, UTXOView};
+use crate::txhashset::{RebuildableKernelView, UTXOView};
 use crate::types::{Tip, TxHashSetRoots, TxHashsetWriteStatus};
 use crate::util::secp::pedersen::{Commitment, RangeProof};
 use crate::util::{file, secp_static, zip};
@@ -168,6 +168,16 @@ impl TxHashSet {
 		self.output_pmmr_h.backend.release_files();
 		self.rproof_pmmr_h.backend.release_files();
 		self.kernel_pmmr_h.backend.release_files();
+	}
+
+	/// Read the "raw" kernel backend data file (via temp file for consistent view on data).
+	pub fn kernel_data_read(&self) -> Result<File, Error> {
+		let file = self
+			.kernel_pmmr_h
+			.backend
+			.data_as_temp_file()
+			.map_err(|_| ErrorKind::FileReadErr("Data file woes".into()))?;
+		Ok(file)
 	}
 
 	/// Check if an output is unspent.
@@ -386,30 +396,6 @@ where
 	res
 }
 
-/// Rewindable (but still readonly) view on the kernel MMR.
-/// The underlying backend is readonly. But we permit the PMMR to be "rewound"
-/// via last_pos.
-/// We create a new db batch for this view and discard it (rollback)
-/// when we are done with the view.
-pub fn rewindable_kernel_view<F, T>(trees: &TxHashSet, inner: F) -> Result<T, Error>
-where
-	F: FnOnce(&mut RewindableKernelView<'_>) -> Result<T, Error>,
-{
-	let res: Result<T, Error>;
-	{
-		let kernel_pmmr =
-			RewindablePMMR::at(&trees.kernel_pmmr_h.backend, trees.kernel_pmmr_h.last_pos);
-
-		// Create a new batch here to pass into the kernel_view.
-		// Discard it (rollback) after we finish with the kernel_view.
-		let batch = trees.commit_index.batch()?;
-		let header = batch.head_header()?;
-		let mut view = RewindableKernelView::new(kernel_pmmr, &batch, header);
-		res = inner(&mut view);
-	}
-	res
-}
-
 pub fn rebuildable_kernel_view<F, T>(trees: &TxHashSet, inner: F) -> Result<T, Error>
 where
 	F: FnOnce(&mut RebuildableKernelView<'_>) -> Result<T, Error>,
@@ -417,13 +403,15 @@ where
 	let res: Result<T, Error>;
 	{
 		let tempdir = tempfile::tempdir()?;
+		let path = tempdir.path();
+
 		let mut kernel_backend: PMMRBackend<TxKernel> =
-			PMMRBackend::new(tempdir.path(), false, false, None)?;
+			PMMRBackend::new(path, false, false, None)?;
 		let kernel_pmmr = PMMR::at(&mut kernel_backend, 0);
 		let sync_head_pmmr =
 			ReadonlyPMMR::at(&trees.sync_pmmr_h.backend, trees.sync_pmmr_h.last_pos);
 		let batch = trees.commit_index.batch()?;
-		let mut view = RebuildableKernelView::new(kernel_pmmr, sync_head_pmmr, &batch);
+		let mut view = RebuildableKernelView::new(kernel_pmmr, sync_head_pmmr, &batch, &path);
 		res = inner(&mut view);
 	}
 	res
