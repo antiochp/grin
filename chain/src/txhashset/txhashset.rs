@@ -38,6 +38,7 @@ use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
+use walkdir::WalkDir;
 
 const HEADERHASHSET_SUBDIR: &'static str = "header";
 const TXHASHSET_SUBDIR: &'static str = "txhashset";
@@ -1232,10 +1233,10 @@ impl<'a> Extension<'a> {
 	}
 
 	/// Validate the txhashset state against the provided block header.
-	/// A "fast validation" will skip rangeproof verification and kernel signature verification.
+	/// Note we used to verify kernel signatures and output rangeproofs here.
+	/// These must be verified separately by the caller now.
 	pub fn validate(
 		&self,
-		fast_validation: bool,
 		status: &dyn TxHashsetWriteStatus,
 	) -> Result<((Commitment, Commitment)), Error> {
 		self.validate_mmrs()?;
@@ -1250,15 +1251,6 @@ impl<'a> Extension<'a> {
 		// The real magicking happens here. Sum of kernel excesses should equal
 		// sum of unspent outputs minus total supply.
 		let (output_sum, kernel_sum) = self.validate_kernel_sums()?;
-
-		// These are expensive verification step (skipped for "fast validation").
-		if !fast_validation {
-			// Verify the rangeproof associated with each unspent output.
-			self.verify_rangeproofs(status)?;
-
-			// Verify all the kernel signatures.
-			self.verify_kernel_signatures(status)?;
-		}
 
 		Ok((output_sum, kernel_sum))
 	}
@@ -1325,44 +1317,8 @@ impl<'a> Extension<'a> {
 		)
 	}
 
-	fn verify_kernel_signatures(&self, status: &dyn TxHashsetWriteStatus) -> Result<(), Error> {
-		let now = Instant::now();
-
-		let mut kern_count = 0;
-		let total_kernels = pmmr::n_leaves(self.kernel_pmmr.unpruned_size());
-		for n in 1..self.kernel_pmmr.unpruned_size() + 1 {
-			if pmmr::is_leaf(n) {
-				let kernel = self
-					.kernel_pmmr
-					.get_data(n)
-					.ok_or::<Error>(ErrorKind::TxKernelNotFound.into())?;
-
-				kernel.verify()?;
-				kern_count += 1;
-
-				if kern_count % 20 == 0 {
-					status.on_validation(kern_count, total_kernels, 0, 0);
-				}
-				if kern_count % 1_000 == 0 {
-					debug!(
-						"txhashset: verify_kernel_signatures: verified {} signatures",
-						kern_count,
-					);
-				}
-			}
-		}
-
-		debug!(
-			"txhashset: verified {} kernel signatures, pmmr size {}, took {}s",
-			kern_count,
-			self.kernel_pmmr.unpruned_size(),
-			now.elapsed().as_secs(),
-		);
-
-		Ok(())
-	}
-
-	fn verify_rangeproofs(&self, status: &dyn TxHashsetWriteStatus) -> Result<(), Error> {
+	/// Verify rangeproofs for full UTXO set.
+	pub fn verify_rangeproofs(&self, status: &dyn TxHashsetWriteStatus) -> Result<(), Error> {
 		let now = Instant::now();
 
 		let mut commits: Vec<Commitment> = vec![];
@@ -1496,9 +1452,24 @@ pub fn zip_write(
 	debug!("zip_write on path: {:?}", root_dir);
 	let txhashset_path = root_dir.clone().join(TXHASHSET_SUBDIR);
 	fs::create_dir_all(txhashset_path.clone())?;
+
+	// TODO - We should just be very explicit about files that we extract
+	// from the zip file and get rid of the post extraction removal step.
+	// Note: This will need some extensive testing.
 	zip::decompress(txhashset_data, &txhashset_path, expected_file)
 		.map_err(|ze| ErrorKind::Other(ze.to_string()))?;
-	check_and_remove_files(&txhashset_path, header)
+	check_and_remove_files(&txhashset_path, header)?;
+	remove_redundant_kernel_mmr_files(&txhashset_path)?;
+
+	// Log the full dir structure after extracting and cleaning it up
+	for entry in WalkDir::new(txhashset_path)
+		.into_iter()
+		.filter_map(|e| e.ok())
+	{
+		debug!("{}", entry.path().display());
+	}
+
+	Ok(())
 }
 
 /// Overwrite txhashset folders in "to" folder with "from" folder
@@ -1558,6 +1529,12 @@ fn expected_file(path: &Path) -> bool {
 		.expect("invalid txhashset regular expression");
 	}
 	RE.is_match(&s_path)
+}
+
+fn remove_redundant_kernel_mmr_files(txhashset_path: &PathBuf) -> Result<(), Error> {
+	let kernel_path = txhashset_path.join(KERNEL_SUBDIR);
+	file::delete(kernel_path.join("pmmr_hash.bin"))?;
+	Ok(())
 }
 
 /// Check a txhashset directory and remove any unexpected

@@ -80,7 +80,6 @@ impl<'a> RebuildableKernelView<'a> {
 		}
 	}
 
-	/// TODO - Cleaner to move this to backend?
 	pub fn copy_to_txhashset(&self, txhashset_path: PathBuf) -> Result<(), Error> {
 		let to_kernel_path = txhashset_path.join("kernel");
 		for file in &["pmmr_data.bin", "pmmr_hash.bin", "pmmr_size.bin"] {
@@ -98,12 +97,11 @@ impl<'a> RebuildableKernelView<'a> {
 		let mut current_pos = 0;
 		let mut current_header = self.get_header_by_height(0)?;
 		loop {
+			// For each header, read kernels off stream, verify kernel signatures
+			// and apply kernels to MMR, keeping track of current MMR pos.
 			while current_pos < current_header.kernel_mmr_size {
-				// Read and verify the next kernel from the stream of data.
 				let kernel: TxKernel = TxKernelEntry::read(&mut stream)?.into();
 				kernel.verify()?;
-
-				// Apply it to the MMR and keep track of last_pos.
 				let (_, last_pos) = self.apply_kernel(&kernel)?;
 				current_pos = last_pos;
 			}
@@ -124,7 +122,8 @@ impl<'a> RebuildableKernelView<'a> {
 				);
 			}
 
-			// Done if we have reached the specified header.
+			// Move to next header. Stop if we hit the desired header or
+			// discover we are on a forked chain at the current height.
 			if current_header == *header {
 				break;
 			} else if current_header.height >= header.height {

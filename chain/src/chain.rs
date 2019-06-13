@@ -522,7 +522,10 @@ impl Chain {
 		// ensure the view is consistent.
 		txhashset::extending_readonly(&mut txhashset, |extension| {
 			extension.rewind(&header)?;
-			extension.validate(fast_validation, &NoStatus)?;
+			if !fast_validation {
+				extension.verify_rangeproofs(&NoStatus)?;
+			}
+			extension.validate(&NoStatus)?;
 			Ok(())
 		})
 	}
@@ -917,9 +920,12 @@ impl Chain {
 		txhashset::extending(&mut txhashset, &mut batch, |extension| {
 			extension.rewind(&header)?;
 
+			// Verify rangeproofs for the full UTXO set.
+			// Note: This is expensive.
+			extension.verify_rangeproofs(status)?;
+
 			// Validate the extension, generating the utxo_sum and kernel_sum.
-			// Full validation, including rangeproofs and kernel signature verification.
-			let (utxo_sum, kernel_sum) = extension.validate(false, status)?;
+			let (utxo_sum, kernel_sum) = extension.validate(status)?;
 
 			// Save the block_sums (utxo_sum, kernel_sum) to the db for use later.
 			extension.batch.save_block_sums(
