@@ -70,7 +70,6 @@ pub fn process_block(b: &Block, ctx: &mut BlockContext<'_>) -> Result<Option<Tip
 	check_known(&b.header, ctx)?;
 
 	let head = ctx.batch.head()?;
-	let header_head = ctx.batch.header_head()?;
 
 	let is_next = b.header.prev_hash == head.last_block_h;
 
@@ -82,9 +81,11 @@ pub fn process_block(b: &Block, ctx: &mut BlockContext<'_>) -> Result<Option<Tip
 		return Err(ErrorKind::Orphan.into());
 	}
 
-	// Process the header for the block.
-	// Note: We still want to process the full block if we have seen this header before
-	// as we may have processed it "header first" and not yet processed the full block.
+	// Check the header is valid before we proceed with the full block.
+	// TODO - EXPERIMENTAL - After processing header for block the header_head may be
+	// out beyond the rest of the MMR structures.
+	// Note: we need the header_head prior to processing the header.
+	let header_head = ctx.batch.header_head()?;
 	process_block_header(&b.header, ctx)?;
 
 	// Validate the block itself, make sure it is internally consistent.
@@ -160,16 +161,6 @@ pub fn sync_block_headers(
 	let last_header = headers.last().expect("last header");
 	let prev_header = ctx.batch.get_previous_header(&first_header)?;
 
-	// Check if we know about all these headers. If so we can accept them quickly.
-	// If they *do not* increase total work on the sync chain we are done.
-	// If they *do* increase total work then we should process them to update sync_head.
-	let sync_head = ctx.batch.get_sync_head()?;
-	if let Ok(existing) = ctx.batch.get_block_header(&last_header.hash()) {
-		if !has_more_work(&existing, &sync_head) {
-			return Ok(());
-		}
-	}
-
 	txhashset::sync_extending(&mut ctx.txhashset, &mut ctx.batch, |extension| {
 		rewind_and_apply_header_fork(&prev_header, extension)?;
 		for header in headers {
@@ -180,14 +171,30 @@ pub fn sync_block_headers(
 		Ok(())
 	})?;
 
+	let sync_head = ctx.batch.get_sync_head()?;
+	if has_more_work(&last_header, &sync_head) {
+		update_sync_head(&Tip::from_header(&last_header), &mut ctx.batch)?;
+	}
+
 	// Validate all our headers now that we have added each "previous"
 	// header to the db in this batch above.
 	for header in headers {
 		validate_header(header, ctx)?;
 	}
 
-	if has_more_work(&last_header, &sync_head) {
-		update_sync_head(&Tip::from_header(&last_header), &mut ctx.batch)?;
+	// Now do the same thing for the header MMR itself.
+	txhashset::header_extending(&mut ctx.txhashset, &mut ctx.batch, |extension| {
+		rewind_and_apply_header_fork(&prev_header, extension)?;
+		for header in headers {
+			extension.validate_root(header)?;
+			extension.apply_header(header)?;
+		}
+		Ok(())
+	})?;
+
+	let header_head = ctx.batch.header_head()?;
+	if has_more_work(&last_header, &header_head) {
+		update_header_head(&Tip::from_header(&last_header), &mut ctx.batch)?;
 	}
 
 	Ok(())
