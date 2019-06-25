@@ -85,7 +85,6 @@ pub fn process_block(b: &Block, ctx: &mut BlockContext<'_>) -> Result<Option<Tip
 	// TODO - EXPERIMENTAL - After processing header for block the header_head may be
 	// out beyond the rest of the MMR structures.
 	// Note: we need the header_head prior to processing the header.
-	let header_head = ctx.batch.header_head()?;
 	process_block_header(&b.header, ctx)?;
 
 	// Validate the block itself, make sure it is internally consistent.
