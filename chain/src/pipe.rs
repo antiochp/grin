@@ -180,21 +180,6 @@ pub fn sync_block_headers(
 		validate_header(header, ctx)?;
 	}
 
-	// Now do the same thing for the header MMR itself.
-	txhashset::header_extending(&mut ctx.txhashset, &mut ctx.batch, |extension| {
-		rewind_and_apply_header_fork(&prev_header, extension)?;
-		for header in headers {
-			extension.validate_root(header)?;
-			extension.apply_header(header)?;
-		}
-		Ok(())
-	})?;
-
-	let header_head = ctx.batch.header_head()?;
-	if has_more_work(&last_header, &header_head) {
-		update_header_head(&Tip::from_header(&last_header), &mut ctx.batch)?;
-	}
-
 	Ok(())
 }
 
