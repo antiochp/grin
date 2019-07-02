@@ -17,6 +17,7 @@
 
 use crate::core::core::hash::{Hash, Hashed, ZERO_HASH};
 use crate::core::core::merkle_proof::MerkleProof;
+use crate::core::core::pmmr;
 use crate::core::core::verifier_cache::VerifierCache;
 use crate::core::core::{
 	Block, BlockHeader, BlockSums, Committed, Output, OutputIdentifier, Transaction, TxKernelEntry,
@@ -173,7 +174,7 @@ impl Chain {
 		let mut txhashset = txhashset::TxHashSet::open(db_root.clone(), store.clone(), None)?;
 
 		setup_head(&genesis, &store, &mut txhashset)?;
-		Chain::log_heads(&store)?;
+		Chain::log_heads(&store, &txhashset)?;
 
 		Ok(Chain {
 			db_root,
@@ -198,7 +199,10 @@ impl Chain {
 		self.store.clone()
 	}
 
-	fn log_heads(store: &store::ChainStore) -> Result<(), Error> {
+	fn log_heads<'a>(
+		store: &store::ChainStore,
+		txhashset: &'a txhashset::TxHashSet,
+	) -> Result<(), Error> {
 		let head = store.head()?;
 		debug!(
 			"init: block_head: {} @ {} [{}]",
@@ -215,27 +219,24 @@ impl Chain {
 			header_head.last_block_h,
 		);
 
-		let sync_head = store.get_sync_head()?;
-		debug!(
-			"init: sync_head: {} @ {} [{}]",
-			sync_head.total_difficulty.to_num(),
-			sync_head.height,
-			sync_head.last_block_h,
-		);
+		let sync_head_pmmr = txhashset.sync_head_pmmr();
+		let last_sync_entry = sync_head_pmmr.get_last_entry();
+		match last_sync_entry {
+			Some(entry) => {
+				let sync_header = store.get_block_header(&entry.hash())?;
+				debug!(
+					"init: sync_head: {} @ {} [{}]",
+					sync_header.total_difficulty(),
+					sync_header.height,
+					sync_header.hash(),
+				);
+			}
+			None => {
+				debug!("init: sync_head: None");
+			}
+		}
 
 		Ok(())
-	}
-
-	/// Reset sync_head to current header_head.
-	/// We do this when we first transition to header_sync to ensure we extend
-	/// the "sync" header MMR from a known consistent state and to ensure we track
-	/// the header chain correctly at the fork point.
-	pub fn reset_sync_head(&self) -> Result<Tip, Error> {
-		let batch = self.store.batch()?;
-		batch.reset_sync_head()?;
-		let head = batch.get_sync_head()?;
-		batch.commit()?;
-		Ok(head)
 	}
 
 	/// Processes a single block, then checks for orphans, processing
@@ -687,14 +688,14 @@ impl Chain {
 	pub fn rebuild_sync_mmr(&self, head: &Tip) -> Result<(), Error> {
 		let mut txhashset = self.txhashset.write();
 		let mut batch = self.store.batch()?;
-		let mut header_pmmr = txhashset.sync_head_pmmr();
-		txhashset::header_extending(&mut header_pmmr, &head, &mut batch, |extension| {
+		let mut header_pmmr = txhashset.sync_head_pmmr_mut();
+		txhashset::header_extending(&mut header_pmmr, &mut batch, |extension| {
 			if extension.size() == 0 {
 				extension.apply_header(&self.genesis)?;
 			}
 			Ok(())
 		})?;
-		txhashset::header_extending(&mut header_pmmr, &head, &mut batch, |extension| {
+		txhashset::header_extending(&mut header_pmmr, &mut batch, |extension| {
 			let header = extension.batch.get_block_header(&head.last_block_h)?;
 			pipe::rewind_and_apply_header_fork(&header, extension)?;
 			Ok(())
@@ -713,14 +714,14 @@ impl Chain {
 		txhashset: &mut txhashset::TxHashSet,
 	) -> Result<(), Error> {
 		let mut batch = self.store.batch()?;
-		let mut pmmr_handle = txhashset.block_head_pmmr();
-		txhashset::header_extending(&mut pmmr_handle, &head, &mut batch, |extension| {
+		let mut pmmr_handle = txhashset.block_head_pmmr_mut();
+		txhashset::header_extending(&mut pmmr_handle, &mut batch, |extension| {
 			if extension.size() == 0 {
 				extension.apply_header(&self.genesis)?;
 			}
 			Ok(())
 		})?;
-		txhashset::header_extending(&mut pmmr_handle, &head, &mut batch, |extension| {
+		txhashset::header_extending(&mut pmmr_handle, &mut batch, |extension| {
 			let header = extension.batch.get_block_header(&head.last_block_h)?;
 			pipe::rewind_and_apply_header_fork(&header, extension)?;
 			Ok(())
@@ -730,31 +731,17 @@ impl Chain {
 	}
 
 	/// Check chain status whether a txhashset downloading is needed
-	pub fn check_txhashset_needed(
-		&self,
-		caller: String,
-		hashes: &mut Option<Vec<Hash>>,
-	) -> Result<bool, Error> {
+	pub fn check_txhashset_needed(&self, hashes: &mut Option<Vec<Hash>>) -> Result<bool, Error> {
 		let horizon = global::cut_through_horizon() as u64;
 		let block_head = self.head()?;
 		let header_head = self.header_head()?;
-		let sync_head = self.get_sync_head()?;
 
-		debug!(
-			"{}: block_head - {}, {}, header_head - {}, {}, sync_head - {}, {}",
-			caller,
-			block_head.last_block_h,
-			block_head.height,
-			header_head.last_block_h,
-			header_head.height,
-			sync_head.last_block_h,
-			sync_head.height,
-		);
+		Chain::log_heads(&self.store, &self.txhashset.read())?;
 
 		if block_head.total_difficulty >= header_head.total_difficulty {
 			debug!(
-				"{}: no need txhashset. header_head.total_difficulty: {} <= block_head.total_difficulty: {}",
-				caller, header_head.total_difficulty, block_head.total_difficulty,
+				"check_txhashset_needed: no need txhashset. header_head.total_difficulty: {} <= block_head.total_difficulty: {}",
+				header_head.total_difficulty, block_head.total_difficulty,
 			);
 			return Ok(false);
 		}
@@ -765,8 +752,8 @@ impl Chain {
 		let mut current = self.get_block_header(&header_head.last_block_h);
 		if current.is_err() {
 			error!(
-				"{}: header_head not found in chain db: {} at {}",
-				caller, header_head.last_block_h, header_head.height,
+				"check_txhashset_needed: header_head not found in chain db: {} at {}",
+				header_head.last_block_h, header_head.height,
 			);
 			return Ok(false);
 		}
@@ -800,12 +787,12 @@ impl Chain {
 				// body head height is 10,001 (but at a fork), oldest_height will be 10,001
 				// body head height is 10,005 (but at a fork with depth 5), oldest_height will be 10,001
 				debug!(
-					"{}: need a state sync for txhashset. oldest block which is not on local chain: {} at {}",
-					caller, oldest_hash, oldest_height,
+					"check_txhashset_needed: need a state sync for txhashset. oldest block which is not on local chain: {} at {}",
+					oldest_hash, oldest_height,
 				);
 			} else {
 				// this is the abnormal case, when is_on_current_chain() already return Err, and even for genesis block.
-				error!("{}: corrupted storage? oldest_height is 0 when check_txhashset_needed. state sync is needed", caller);
+				error!("check_txhashset_needed: corrupted storage? oldest_height is 0 when check_txhashset_needed. state sync is needed");
 			}
 			Ok(true)
 		} else {
@@ -864,7 +851,7 @@ impl Chain {
 
 		// Initial check whether this txhashset is needed or not
 		let mut hashes: Option<Vec<Hash>> = None;
-		if !self.check_txhashset_needed("txhashset_write".to_owned(), &mut hashes)? {
+		if !self.check_txhashset_needed(&mut hashes)? {
 			warn!("txhashset_write: txhashset received but it's not needed! ignored.");
 			return Err(ErrorKind::InvalidTxHashSet("not needed".to_owned()).into());
 		}
@@ -1247,12 +1234,16 @@ impl Chain {
 		}
 	}
 
-	/// Get the tip of the current "sync" header chain.
-	/// This may be significantly different to current header chain.
+	// /// Get the tip of the current "sync" header chain.
+	// /// This may diverge significantly from current header (or block) chain.
 	pub fn get_sync_head(&self) -> Result<Tip, Error> {
-		self.store
-			.get_sync_head()
-			.map_err(|e| ErrorKind::StoreErr(e, "chain get sync head".to_owned()).into())
+		let txhashset = self.txhashset.read();
+		let sync_head_pmmr = txhashset.sync_head_pmmr();
+		let last_entry = sync_head_pmmr
+			.get_last_entry()
+			.ok_or(ErrorKind::Other(format!("no sync head").into()))?;
+		let header = self.store.get_block_header(&last_entry.hash())?;
+		Ok(Tip::from_header(&header))
 	}
 
 	/// Builds an iterator on blocks starting from the current chain head and
@@ -1288,8 +1279,8 @@ fn setup_head(
 
 			// First initialize our block_head MMR with the genesis header if empty.
 			{
-				let mut pmmr_handle = txhashset.block_head_pmmr();
-				txhashset::header_extending(&mut pmmr_handle, &head, &mut batch, |extension| {
+				let mut pmmr_handle = txhashset.block_head_pmmr_mut();
+				txhashset::header_extending(&mut pmmr_handle, &mut batch, |extension| {
 					if extension.size() == 0 {
 						extension.apply_header(&genesis.header)?;
 					}
@@ -1306,16 +1297,11 @@ fn setup_head(
 
 				// Rebuild our block_head MMR to a consistent state.
 				{
-					let mut pmmr_handle = txhashset.block_head_pmmr();
-					txhashset::header_extending(
-						&mut pmmr_handle,
-						&head,
-						&mut batch,
-						|extension| {
-							pipe::rewind_and_apply_header_fork(&header, extension)?;
-							Ok(())
-						},
-					)?;
+					let mut pmmr_handle = txhashset.block_head_pmmr_mut();
+					txhashset::header_extending(&mut pmmr_handle, &mut batch, |extension| {
+						pipe::rewind_and_apply_header_fork(&header, extension)?;
+						Ok(())
+					})?;
 				}
 
 				let res = txhashset::extending(txhashset, &mut batch, |extension| {
@@ -1393,8 +1379,8 @@ fn setup_head(
 					kernel_sum,
 				};
 			}
-			let mut header_pmmr = txhashset.header_head_pmmr();
-			txhashset::header_extending(&mut header_pmmr, &tip, &mut batch, |extension| {
+			let mut header_pmmr = txhashset.header_head_pmmr_mut();
+			txhashset::header_extending(&mut header_pmmr, &mut batch, |extension| {
 				extension.apply_header(&genesis.header)?;
 				Ok(())
 			})?;
@@ -1412,27 +1398,6 @@ fn setup_head(
 		}
 		Err(e) => return Err(ErrorKind::StoreErr(e, "chain init load head".to_owned()))?,
 	};
-
-	// Check we have the header corresponding to the header_head.
-	// If not then something is corrupted and we should reset our header_head.
-	// Either way we want to reset sync_head to match header_head.
-	let head = batch.head()?;
-	let header_head = batch.header_head()?;
-	if batch.get_block_header(&header_head.last_block_h).is_ok() {
-		// Reset sync_head to be consistent with current header_head.
-		batch.reset_sync_head()?;
-	} else {
-		// Reset both header_head and sync_head to be consistent with current head.
-		warn!(
-			"setup_head: header missing for {}, {}, resetting header_head and sync_head to head: {}, {}",
-			header_head.last_block_h,
-			header_head.height,
-			head.last_block_h,
-			head.height,
-		);
-		batch.reset_header_head()?;
-		batch.reset_sync_head()?;
-	}
 
 	batch.commit()?;
 

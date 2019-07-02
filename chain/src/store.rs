@@ -32,7 +32,7 @@ const BLOCK_PREFIX: u8 = 'b' as u8;
 const HEAD_PREFIX: u8 = 'H' as u8;
 const TAIL_PREFIX: u8 = 'T' as u8;
 const HEADER_HEAD_PREFIX: u8 = 'I' as u8;
-const SYNC_HEAD_PREFIX: u8 = 's' as u8;
+// const SYNC_HEAD_PREFIX: u8 = 's' as u8;
 const COMMIT_POS_PREFIX: u8 = 'c' as u8;
 const BLOCK_INPUT_BITMAP_PREFIX: u8 = 'B' as u8;
 const BLOCK_SUMS_PREFIX: u8 = 'M' as u8;
@@ -71,10 +71,10 @@ impl ChainStore {
 		option_to_not_found(self.db.get_ser(&vec![HEADER_HEAD_PREFIX]), "HEADER_HEAD")
 	}
 
-	/// The "sync" head.
-	pub fn get_sync_head(&self) -> Result<Tip, Error> {
-		option_to_not_found(self.db.get_ser(&vec![SYNC_HEAD_PREFIX]), "SYNC_HEAD")
-	}
+	// /// The "sync" head.
+	// pub fn get_sync_head(&self) -> Result<Tip, Error> {
+	// 	option_to_not_found(self.db.get_ser(&vec![SYNC_HEAD_PREFIX]), "SYNC_HEAD")
+	// }
 
 	/// Get full block.
 	pub fn get_block(&self, h: &Hash) -> Result<Block, Error> {
@@ -155,10 +155,10 @@ impl<'a> Batch<'a> {
 		option_to_not_found(self.db.get_ser(&vec![HEADER_HEAD_PREFIX]), "HEADER_HEAD")
 	}
 
-	/// Get "sync" head.
-	pub fn get_sync_head(&self) -> Result<Tip, Error> {
-		option_to_not_found(self.db.get_ser(&vec![SYNC_HEAD_PREFIX]), "SYNC_HEAD")
-	}
+	// /// Get "sync" head.
+	// pub fn get_sync_head(&self) -> Result<Tip, Error> {
+	// 	option_to_not_found(self.db.get_ser(&vec![SYNC_HEAD_PREFIX]), "SYNC_HEAD")
+	// }
 
 	/// Save block head to db.
 	pub fn save_block_head(&self, t: &Tip) -> Result<(), Error> {
@@ -175,16 +175,16 @@ impl<'a> Batch<'a> {
 		self.db.put_ser(&vec![HEADER_HEAD_PREFIX], t)
 	}
 
-	/// Save "sync" head to db.
-	pub fn save_sync_head(&self, t: &Tip) -> Result<(), Error> {
-		self.db.put_ser(&vec![SYNC_HEAD_PREFIX], t)
-	}
-
-	/// Reset sync_head to the current head of the header chain.
-	pub fn reset_sync_head(&self) -> Result<(), Error> {
-		let head = self.header_head()?;
-		self.save_sync_head(&head)
-	}
+	// /// Save "sync" head to db.
+	// pub fn save_sync_head(&self, t: &Tip) -> Result<(), Error> {
+	// 	self.db.put_ser(&vec![SYNC_HEAD_PREFIX], t)
+	// }
+	//
+	// /// Reset sync_head to the current head of the header chain.
+	// pub fn reset_sync_head(&self) -> Result<(), Error> {
+	// 	let head = self.header_head()?;
+	// 	self.save_sync_head(&head)
+	// }
 
 	/// Reset header_head to the current head of the body chain.
 	pub fn reset_header_head(&self) -> Result<(), Error> {

@@ -174,8 +174,8 @@ pub fn sync_block_headers(
 		}
 	}
 
-	let mut header_pmmr = ctx.txhashset.header_head_pmmr();
-	txhashset::header_extending(&mut header_pmmr, &sync_head, &mut ctx.batch, |extension| {
+	let mut pmmr = ctx.txhashset.sync_head_pmmr();
+	txhashset::header_extending(&mut pmmr, &sync_head, &mut ctx.batch, |extension| {
 		rewind_and_apply_header_fork(&prev_header, extension)?;
 		for header in headers {
 			extension.validate_root(header)?;
@@ -220,8 +220,8 @@ pub fn process_block_header(header: &BlockHeader, ctx: &mut BlockContext<'_>) ->
 			return Ok(());
 		}
 	}
-	let mut header_pmmr = ctx.txhashset.header_head_pmmr();
-	txhashset::header_extending(&mut header_pmmr, &header_head, &mut ctx.batch, |extension| {
+	let mut pmmr = ctx.txhashset.header_head_pmmr();
+	txhashset::header_extending(&mut pmmr, &header_head, &mut ctx.batch, |extension| {
 		rewind_and_apply_header_fork(&prev_header, extension)?;
 		extension.validate_root(header)?;
 		extension.apply_header(header)?;
@@ -495,17 +495,17 @@ fn has_more_work(header: &BlockHeader, head: &Tip) -> bool {
 	header.total_difficulty() > head.total_difficulty
 }
 
-/// Update the sync head so we can keep syncing from where we left off.
-fn update_sync_head(head: &Tip, batch: &mut store::Batch<'_>) -> Result<(), Error> {
-	batch
-		.save_sync_head(&head)
-		.map_err(|e| ErrorKind::StoreErr(e, "pipe save sync head".to_owned()))?;
-	debug!(
-		"sync_head updated to {} at {}",
-		head.last_block_h, head.height
-	);
-	Ok(())
-}
+// /// Update the sync head so we can keep syncing from where we left off.
+// fn update_sync_head(head: &Tip, batch: &mut store::Batch<'_>) -> Result<(), Error> {
+// 	batch
+// 		.save_sync_head(&head)
+// 		.map_err(|e| ErrorKind::StoreErr(e, "pipe save sync head".to_owned()))?;
+// 	debug!(
+// 		"sync_head updated to {} at {}",
+// 		head.last_block_h, head.height
+// 	);
+// 	Ok(())
+// }
 
 /// Update the header_head.
 fn update_header_head(head: &Tip, batch: &mut store::Batch<'_>) -> Result<(), Error> {

@@ -75,6 +75,23 @@ impl<T: PMMRable> PMMRHandle<T> {
 		let last_pos = backend.unpruned_size();
 		Ok(PMMRHandle { backend, last_pos })
 	}
+
+	pub fn last_pos(&self) -> u64 {
+		self.last_pos
+	}
+
+	pub fn get_data(&self, pos: u64) -> Option<T::E> {
+		self.backend.get_data(pos)
+	}
+
+	pub fn get_last_entry(&self) -> Option<T::E> {
+		let pos = pmmr::bintree_rightmost(self.last_pos());
+		if pos > 0 {
+			self.get_data(pos)
+		} else {
+			None
+		}
+	}
 }
 
 /// An easy to manipulate structure holding the 3 sum trees necessary to
@@ -172,15 +189,27 @@ impl TxHashSet {
 		})
 	}
 
-	pub fn block_head_pmmr<'a>(&'a mut self) -> &'a mut PMMRHandle<BlockHeader> {
+	pub fn block_head_pmmr<'a>(&'a self) -> &'a PMMRHandle<BlockHeader> {
+		&self.block_head_pmmr_h
+	}
+
+	pub fn header_head_pmmr<'a>(&'a self) -> &'a PMMRHandle<BlockHeader> {
+		&self.header_head_pmmr_h
+	}
+
+	pub fn sync_head_pmmr<'a>(&'a self) -> &'a PMMRHandle<BlockHeader> {
+		&self.sync_head_pmmr_h
+	}
+
+	pub fn block_head_pmmr_mut<'a>(&'a mut self) -> &'a mut PMMRHandle<BlockHeader> {
 		&mut self.block_head_pmmr_h
 	}
 
-	pub fn header_head_pmmr<'a>(&'a mut self) -> &'a mut PMMRHandle<BlockHeader> {
+	pub fn header_head_pmmr_mut<'a>(&'a mut self) -> &'a mut PMMRHandle<BlockHeader> {
 		&mut self.header_head_pmmr_h
 	}
 
-	pub fn sync_head_pmmr<'a>(&'a mut self) -> &'a mut PMMRHandle<BlockHeader> {
+	pub fn sync_head_pmmr_mut<'a>(&'a mut self) -> &'a mut PMMRHandle<BlockHeader> {
 		&mut self.sync_head_pmmr_h
 	}
 
@@ -515,7 +544,6 @@ where
 /// to allow headers to be validated before receiving full block data.
 pub fn header_extending<'a, F, T>(
 	pmmr_handle: &'a mut PMMRHandle<BlockHeader>,
-	head: &Tip,
 	batch: &'a mut Batch<'_>,
 	inner: F,
 ) -> Result<T, Error>
@@ -523,9 +551,10 @@ where
 	F: FnOnce(&mut HeaderExtension<'_>) -> Result<T, Error>,
 {
 	let child_batch = batch.child()?;
-	let header = child_batch.get_block_header(&head.last_block_h)?;
+	// let last_entry = pmmr_handle.get_data(pmmr_handle.last_pos).expect("header MMR head");
+	// let header = child_batch.get_block_header(&last_entry.hash())?;
 	let pmmr = PMMR::at(&mut pmmr_handle.backend, pmmr_handle.last_pos);
-	let mut extension = HeaderExtension::new(pmmr, &child_batch, header);
+	let mut extension = HeaderExtension::new(pmmr, &child_batch);
 	let res = inner(&mut extension);
 	if res.is_err() || extension.rollback() {
 		pmmr_handle.backend.discard();
@@ -540,8 +569,6 @@ where
 /// A header extension to allow the header MMR to extend beyond the other MMRs individually.
 /// This is to allow headers to be validated against the MMR before we have the full block data.
 pub struct HeaderExtension<'a> {
-	header: BlockHeader,
-
 	pmmr: PMMR<'a, BlockHeader, PMMRBackend<BlockHeader>>,
 
 	/// Rollback flag.
@@ -557,10 +584,8 @@ impl<'a> HeaderExtension<'a> {
 	fn new(
 		pmmr: PMMR<'a, BlockHeader, PMMRBackend<BlockHeader>>,
 		batch: &'a Batch<'_>,
-		header: BlockHeader,
 	) -> HeaderExtension<'a> {
 		HeaderExtension {
-			header,
 			pmmr,
 			rollback: false,
 			batch,
@@ -610,7 +635,7 @@ impl<'a> HeaderExtension<'a> {
 	/// extension.
 	pub fn apply_header(&mut self, header: &BlockHeader) -> Result<Hash, Error> {
 		self.pmmr.push(header).map_err(&ErrorKind::TxHashSetErr)?;
-		self.header = header.clone();
+		// self.header = header.clone();
 		Ok(self.root())
 	}
 
@@ -629,7 +654,7 @@ impl<'a> HeaderExtension<'a> {
 			.map_err(&ErrorKind::TxHashSetErr)?;
 
 		// Update our header to reflect the one we rewound to.
-		self.header = header.clone();
+		// self.header = header.clone();
 
 		Ok(())
 	}

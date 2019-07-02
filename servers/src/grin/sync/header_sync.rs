@@ -64,14 +64,14 @@ impl HeaderSync {
 			| SyncStatus::HeaderSync { .. }
 			| SyncStatus::TxHashsetDone => true,
 			SyncStatus::NoSync | SyncStatus::Initial | SyncStatus::AwaitingPeers(_) => {
-				let sync_head = self.chain.get_sync_head()?;
-				debug!(
-					"sync: initial transition to HeaderSync. sync_head: {} at {}, resetting to: {} at {}",
-					sync_head.hash(),
-					sync_head.height,
-					header_head.hash(),
-					header_head.height,
-				);
+				// let sync_head = self.chain.get_sync_head()?;
+				// debug!(
+				// 	"sync: initial transition to HeaderSync. sync_head: {} at {}, resetting to: {} at {}",
+				// 	sync_head.hash(),
+				// 	sync_head.height,
+				// 	header_head.hash(),
+				// 	header_head.height,
+				// );
 
 				// Reset sync_head to header_head on transition to HeaderSync,
 				// but ONLY on initial transition to HeaderSync state.
@@ -81,9 +81,9 @@ impl HeaderSync {
 				// correctly, so reset any previous (and potentially stale) sync_head to match
 				// our last known "good" header_head.
 				//
-				self.chain.reset_sync_head()?;
+				// self.chain.reset_sync_head()?;
 
-				// Rebuild the sync MMR to match our updated sync_head.
+				// Rebuild the sync_head MMR to be consistent with out header_head MMR.
 				self.chain.rebuild_sync_mmr(&header_head)?;
 
 				self.history_locator.retain(|&x| x.0 == 0);
