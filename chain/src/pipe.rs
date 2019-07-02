@@ -75,7 +75,6 @@ pub fn process_block(b: &Block, ctx: &mut BlockContext<'_>) -> Result<Option<Tip
 	check_known(&b.header, ctx)?;
 
 	let head = ctx.batch.head()?;
-	let header_head = ctx.batch.header_head()?;
 
 	let is_next = b.header.prev_hash == head.last_block_h;
 
@@ -99,7 +98,7 @@ pub fn process_block(b: &Block, ctx: &mut BlockContext<'_>) -> Result<Option<Tip
 	// Start a chain extension unit of work dependent on the success of the
 	// internal validation and saving operations
 	let block_sums = txhashset::extending(&mut ctx.txhashset, &mut ctx.batch, |mut extension| {
-		rewind_and_apply_fork(&prev, &header_head, extension)?;
+		rewind_and_apply_fork(&prev, extension)?;
 
 		// Check any coinbase being spent have matured sufficiently.
 		// This needs to be done within the context of a potentially
@@ -175,7 +174,8 @@ pub fn sync_block_headers(
 		}
 	}
 
-	txhashset::sync_extending(&mut ctx.txhashset, &mut ctx.batch, |extension| {
+	let mut header_pmmr = ctx.txhashset.header_head_pmmr();
+	txhashset::header_extending(&mut header_pmmr, &sync_head, &mut ctx.batch, |extension| {
 		rewind_and_apply_header_fork(&prev_header, extension)?;
 		for header in headers {
 			extension.validate_root(header)?;
@@ -220,8 +220,8 @@ pub fn process_block_header(header: &BlockHeader, ctx: &mut BlockContext<'_>) ->
 			return Ok(());
 		}
 	}
-
-	txhashset::header_extending(&mut ctx.txhashset, &mut ctx.batch, |extension| {
+	let mut header_pmmr = ctx.txhashset.header_head_pmmr();
+	txhashset::header_extending(&mut header_pmmr, &header_head, &mut ctx.batch, |extension| {
 		rewind_and_apply_header_fork(&prev_header, extension)?;
 		extension.validate_root(header)?;
 		extension.apply_header(header)?;
@@ -520,6 +520,7 @@ fn update_header_head(head: &Tip, batch: &mut store::Batch<'_>) -> Result<(), Er
 }
 
 /// Rewind the header chain and reapply headers on a fork.
+/// TODO - "fork_hashes" here grows with the size of the chain - consider batching up somehow?
 pub fn rewind_and_apply_header_fork(
 	header: &BlockHeader,
 	ext: &mut txhashset::HeaderExtension<'_>,
@@ -553,42 +554,21 @@ pub fn rewind_and_apply_header_fork(
 /// to find to fork root. Rewind the txhashset to the root and apply all
 /// necessary blocks prior to the one being processed to set the txhashset in
 /// the expected state.
+/// TODO - "fork_hashes" here grows with the size of the chain - consider batching up somehow?
 pub fn rewind_and_apply_fork(
 	header: &BlockHeader,
-	header_head: &Tip,
 	ext: &mut txhashset::Extension<'_>,
 ) -> Result<(), Error> {
-	// Find the fork point where head and header_head diverge.
-	// We may need to rewind back to this fork point if they diverged
-	// prior to the fork point for the provided header.
-	let header_forked_header = {
-		let mut current = ext.batch.get_block_header(&header_head.last_block_h)?;
-		while current.height > 0 && !ext.is_on_current_chain(&current).is_ok() {
-			current = ext.batch.get_previous_header(&current)?;
-		}
-		current
-	};
-
-	// Find the fork point where the provided header diverges from our main chain.
-	// Account for the header fork point. Use the earliest fork point to determine
-	// where we need to rewind to. We need to do this
-	let (forked_header, fork_hashes) = {
-		let mut fork_hashes = vec![];
-		let mut current = header.clone();
-		while current.height > 0
-			&& (!ext.is_on_current_chain(&current).is_ok()
-				|| current.height > header_forked_header.height)
-		{
-			fork_hashes.push(current.hash());
-			current = ext.batch.get_previous_header(&current)?;
-		}
-		fork_hashes.reverse();
-
-		(current, fork_hashes)
-	};
+	let mut fork_hashes = vec![];
+	let mut current = header.clone();
+	while current.height > 0 && !ext.is_on_current_chain(&current).is_ok() {
+		fork_hashes.push(current.hash());
+		current = ext.batch.get_previous_header(&current)?;
+	}
+	fork_hashes.reverse();
 
 	// Rewind the txhashset state back to the block where we forked from the most work chain.
-	ext.rewind(&forked_header)?;
+	ext.rewind(&current)?;
 
 	// Now re-apply all blocks on this fork.
 	for h in fork_hashes {
