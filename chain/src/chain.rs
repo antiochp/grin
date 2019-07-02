@@ -727,25 +727,25 @@ impl Chain {
 		hashes: &mut Option<Vec<Hash>>,
 	) -> Result<bool, Error> {
 		let horizon = global::cut_through_horizon() as u64;
-		let body_head = self.head()?;
+		let block_head = self.head()?;
 		let header_head = self.header_head()?;
 		let sync_head = self.get_sync_head()?;
 
 		debug!(
-			"{}: body_head - {}, {}, header_head - {}, {}, sync_head - {}, {}",
+			"{}: block_head - {}, {}, header_head - {}, {}, sync_head - {}, {}",
 			caller,
-			body_head.last_block_h,
-			body_head.height,
+			block_head.last_block_h,
+			block_head.height,
 			header_head.last_block_h,
 			header_head.height,
 			sync_head.last_block_h,
 			sync_head.height,
 		);
 
-		if body_head.total_difficulty >= header_head.total_difficulty {
+		if block_head.total_difficulty >= header_head.total_difficulty {
 			debug!(
-				"{}: no need txhashset. header_head.total_difficulty: {} <= body_head.total_difficulty: {}",
-				caller, header_head.total_difficulty, body_head.total_difficulty,
+				"{}: no need txhashset. header_head.total_difficulty: {} <= block_head.total_difficulty: {}",
+				caller, header_head.total_difficulty, block_head.total_difficulty,
 			);
 			return Ok(false);
 		}
@@ -769,7 +769,7 @@ impl Chain {
 		while let Ok(header) = current {
 			// break out of the while loop when we find a header common
 			// between the header chain and the current body chain
-			if header.height <= body_head.height {
+			if header.height <= block_head.height {
 				if let Ok(_) = self.is_on_current_chain(&header) {
 					break;
 				}
@@ -916,7 +916,7 @@ impl Chain {
 		// Save the new head to the db and rebuild the header by height index.
 		{
 			let tip = Tip::from_header(&header);
-			batch.save_body_head(&tip)?;
+			batch.save_block_head(&tip)?;
 
 			// Reset the body tail to the body head after a txhashset write
 			batch.save_body_tail(&tip)?;
@@ -1344,7 +1344,7 @@ fn setup_head(
 					let prev_header = batch.get_block_header(&head.prev_block_h)?;
 					let _ = batch.delete_block(&header.hash());
 					head = Tip::from_header(&prev_header);
-					batch.save_body_head(&head)?;
+					batch.save_block_head(&head)?;
 				}
 			}
 		}
@@ -1360,7 +1360,7 @@ fn setup_head(
 
 			// Save these ahead of time as we need head and header_head to be initialized
 			// with *something* when creating a txhashset extension below.
-			batch.save_body_head(&tip)?;
+			batch.save_block_head(&tip)?;
 			batch.save_header_head(&tip)?;
 
 			if genesis.kernels().len() > 0 {

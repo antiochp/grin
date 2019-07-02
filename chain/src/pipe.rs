@@ -482,7 +482,7 @@ fn add_block_header(bh: &BlockHeader, batch: &store::Batch<'_>) -> Result<(), Er
 
 fn update_head(head: &Tip, batch: &mut store::Batch<'_>) -> Result<(), Error> {
 	batch
-		.save_body_head(&head)
+		.save_block_head(&head)
 		.map_err(|e| ErrorKind::StoreErr(e, "pipe save body".to_owned()))?;
 
 	debug!("head updated to {} at {}", head.last_block_h, head.height);

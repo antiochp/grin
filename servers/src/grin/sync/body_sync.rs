@@ -121,12 +121,12 @@ impl BodySync {
 			.collect::<Vec<_>>();
 
 		if hashes_to_get.len() > 0 {
-			let body_head = self.chain.head()?;
+			let block_head = self.chain.head()?;
 			let header_head = self.chain.header_head()?;
 
 			debug!(
 				"block_sync: {}/{} requesting blocks {:?} from {} peers",
-				body_head.height,
+				block_head.height,
 				header_head.height,
 				hashes_to_get,
 				peers.len(),
