@@ -123,8 +123,13 @@ pub fn process_block(b: &Block, ctx: &mut BlockContext<'_>) -> Result<Option<Tip
 
 		// If applying this block does not increase the work on the chain then
 		// we know we have not yet updated the chain to produce a new chain head.
-		let head = extension.batch.head()?;
-		if !has_more_work(&b.header, &head) {
+		if has_more_work(&b.header, &head) {
+			debug!(
+				"process_block: updating head to {} at {}",
+				&b.header.hash(),
+				&b.header.height
+			);
+		} else {
 			extension.force_rollback();
 		}
 

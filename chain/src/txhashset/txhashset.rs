@@ -511,14 +511,6 @@ where
 		trees.output_pmmr_h.backend.sync()?;
 		trees.rproof_pmmr_h.backend.sync()?;
 		trees.kernel_pmmr_h.backend.sync()?;
-		if let Some(last_entry) = trees.block_head_pmmr_h.get_last_entry() {
-			let header = child_batch.get_block_header(&last_entry.hash())?;
-			debug!(
-				"txhashet extension: updated to {} at {}",
-				header.hash(),
-				header.height
-			);
-		}
 		child_batch.commit()?;
 	}
 	res
@@ -545,15 +537,6 @@ where
 	} else {
 		pmmr_handle.last_pos = extension.size();
 		pmmr_handle.backend.sync()?;
-		if let Some(last_entry) = pmmr_handle.get_last_entry() {
-			let header = child_batch.get_block_header(&last_entry.hash())?;
-			debug!(
-				"{} extension: updated to {} at {}",
-				pmmr_handle.name(),
-				header.hash(),
-				header.height
-			);
-		}
 		child_batch.commit()?;
 	}
 	res
