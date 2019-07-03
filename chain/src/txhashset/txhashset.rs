@@ -54,6 +54,7 @@ const TXHASHSET_ZIP: &'static str = "txhashset_snapshot";
 
 pub struct PMMRHandle<T: PMMRable> {
 	backend: PMMRBackend<T>,
+	name: String,
 	last_pos: u64,
 }
 
@@ -66,6 +67,7 @@ impl<T: PMMRable> PMMRHandle<T> {
 		fixed_size: bool,
 		header: Option<&BlockHeader>,
 	) -> Result<PMMRHandle<T>, Error> {
+		let name = file_name.to_string();
 		let path = Path::new(root_dir).join(sub_dir).join(file_name);
 		fs::create_dir_all(path.clone())?;
 		let path_str = path.to_str().ok_or(Error::from(ErrorKind::Other(
@@ -73,7 +75,15 @@ impl<T: PMMRable> PMMRHandle<T> {
 		)))?;
 		let backend = PMMRBackend::new(path_str.to_string(), prunable, fixed_size, header)?;
 		let last_pos = backend.unpruned_size();
-		Ok(PMMRHandle { backend, last_pos })
+		Ok(PMMRHandle {
+			backend,
+			name,
+			last_pos,
+		})
+	}
+
+	pub fn name(&self) -> String {
+		self.name.clone()
 	}
 
 	pub fn last_pos(&self) -> u64 {
@@ -85,12 +95,7 @@ impl<T: PMMRable> PMMRHandle<T> {
 	}
 
 	pub fn get_last_entry(&self) -> Option<T::E> {
-		let pos = pmmr::bintree_rightmost(self.last_pos());
-		if pos > 0 {
-			self.get_data(pos)
-		} else {
-			None
-		}
+		self.backend.get_last_entry()
 	}
 }
 
@@ -480,10 +485,6 @@ pub fn extending<'a, F, T>(
 where
 	F: FnOnce(&mut Extension<'_>) -> Result<T, Error>,
 {
-	let sizes: (u64, u64, u64, u64);
-	let res: Result<T, Error>;
-	let rollback: bool;
-
 	// We want to use the current head of the most work chain unless
 	// we explicitly rewind the extension.
 	let header = batch.head_header()?;
@@ -491,51 +492,36 @@ where
 	// create a child transaction so if the state is rolled back by itself, all
 	// index saving can be undone
 	let child_batch = batch.child()?;
-	{
-		trace!("Starting new txhashset extension.");
 
-		// TODO - header_mmr may be out ahead via the header_head
-		// TODO - do we need to handle this via an explicit rewind on the header_mmr?
-		let mut extension = Extension::new(trees, &child_batch, header);
-		res = inner(&mut extension);
+	let mut extension = Extension::new(trees, &child_batch, header);
+	let res = inner(&mut extension);
 
-		rollback = extension.rollback;
-		sizes = extension.sizes();
-	}
-
-	match res {
-		Err(e) => {
-			debug!("Error returned, discarding txhashset extension: {}", e);
-			trees.block_head_pmmr_h.backend.discard();
-			trees.output_pmmr_h.backend.discard();
-			trees.rproof_pmmr_h.backend.discard();
-			trees.kernel_pmmr_h.backend.discard();
-			Err(e)
+	if res.is_err() || extension.rollback() {
+		trees.block_head_pmmr_h.backend.discard();
+		trees.output_pmmr_h.backend.discard();
+		trees.rproof_pmmr_h.backend.discard();
+		trees.kernel_pmmr_h.backend.discard();
+	} else {
+		let sizes = extension.sizes();
+		trees.block_head_pmmr_h.last_pos = sizes.0;
+		trees.output_pmmr_h.last_pos = sizes.1;
+		trees.rproof_pmmr_h.last_pos = sizes.2;
+		trees.kernel_pmmr_h.last_pos = sizes.3;
+		trees.block_head_pmmr_h.backend.sync()?;
+		trees.output_pmmr_h.backend.sync()?;
+		trees.rproof_pmmr_h.backend.sync()?;
+		trees.kernel_pmmr_h.backend.sync()?;
+		if let Some(last_entry) = trees.block_head_pmmr_h.get_last_entry() {
+			let header = child_batch.get_block_header(&last_entry.hash())?;
+			debug!(
+				"txhashet extension: updated to {} at {}",
+				header.hash(),
+				header.height
+			);
 		}
-		Ok(r) => {
-			if rollback {
-				trace!("Rollbacking txhashset extension. sizes {:?}", sizes);
-				trees.block_head_pmmr_h.backend.discard();
-				trees.output_pmmr_h.backend.discard();
-				trees.rproof_pmmr_h.backend.discard();
-				trees.kernel_pmmr_h.backend.discard();
-			} else {
-				trace!("Committing txhashset extension. sizes {:?}", sizes);
-				child_batch.commit()?;
-				trees.block_head_pmmr_h.backend.sync()?;
-				trees.output_pmmr_h.backend.sync()?;
-				trees.rproof_pmmr_h.backend.sync()?;
-				trees.kernel_pmmr_h.backend.sync()?;
-				trees.block_head_pmmr_h.last_pos = sizes.0;
-				trees.output_pmmr_h.last_pos = sizes.1;
-				trees.rproof_pmmr_h.last_pos = sizes.2;
-				trees.kernel_pmmr_h.last_pos = sizes.3;
-			}
-
-			trace!("TxHashSet extension done.");
-			Ok(r)
-		}
+		child_batch.commit()?;
 	}
+	res
 }
 
 /// Start a new header MMR unit of work.
@@ -551,8 +537,6 @@ where
 	F: FnOnce(&mut HeaderExtension<'_>) -> Result<T, Error>,
 {
 	let child_batch = batch.child()?;
-	// let last_entry = pmmr_handle.get_data(pmmr_handle.last_pos).expect("header MMR head");
-	// let header = child_batch.get_block_header(&last_entry.hash())?;
 	let pmmr = PMMR::at(&mut pmmr_handle.backend, pmmr_handle.last_pos);
 	let mut extension = HeaderExtension::new(pmmr, &child_batch);
 	let res = inner(&mut extension);
@@ -561,6 +545,15 @@ where
 	} else {
 		pmmr_handle.last_pos = extension.size();
 		pmmr_handle.backend.sync()?;
+		if let Some(last_entry) = pmmr_handle.get_last_entry() {
+			let header = child_batch.get_block_header(&last_entry.hash())?;
+			debug!(
+				"{} extension: updated to {} at {}",
+				pmmr_handle.name(),
+				header.hash(),
+				header.height
+			);
+		}
 		child_batch.commit()?;
 	}
 	res
@@ -595,6 +588,28 @@ impl<'a> HeaderExtension<'a> {
 	/// Get the header hash for the specified pos from the underlying MMR backend.
 	fn get_header_hash(&self, pos: u64) -> Option<Hash> {
 		self.pmmr.get_data(pos).map(|x| x.hash())
+	}
+
+	/// TODO - Rename this and get_head()
+	pub fn get_head_hash(&self) -> Result<Hash, Error> {
+		let last_entry = self
+			.pmmr
+			.get_last_entry()
+			.ok_or(ErrorKind::Other(format!("no head").into()))?;
+		Ok(last_entry.hash())
+	}
+
+	pub fn get_confirmed_head(&self) -> Result<Tip, Error> {
+		let mut pos = self.pmmr.last_pos;
+		while pos > 0 {
+			if let Some(entry) = self.pmmr.get_data(pos) {
+				if let Ok(header) = self.batch.get_block_header(&entry.hash()) {
+					return Ok(Tip::from_header(&header));
+				}
+			}
+			pos -= 1;
+		}
+		Err(ErrorKind::Other(format!("no confirmed head")).into())
 	}
 
 	/// Get the header at the specified height based on the current state of the header extension.
@@ -652,9 +667,6 @@ impl<'a> HeaderExtension<'a> {
 		self.pmmr
 			.rewind(header_pos, &Bitmap::create())
 			.map_err(&ErrorKind::TxHashSetErr)?;
-
-		// Update our header to reflect the one we rewound to.
-		// self.header = header.clone();
 
 		Ok(())
 	}
@@ -1201,6 +1213,10 @@ impl<'a> Extension<'a> {
 	/// Force the rollback of this extension, no matter the result
 	pub fn force_rollback(&mut self) {
 		self.rollback = true;
+	}
+
+	fn rollback(&self) -> bool {
+		self.rollback
 	}
 
 	/// Dumps the output MMR.

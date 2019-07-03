@@ -211,29 +211,37 @@ impl Chain {
 			head.last_block_h,
 		);
 
-		let header_head = store.header_head()?;
-		debug!(
-			"init: header_head: {} @ {} [{}]",
-			header_head.total_difficulty.to_num(),
-			header_head.height,
-			header_head.last_block_h,
-		);
+		let header_head_pmmr = txhashset.header_head_pmmr();
+		let last_header_entry = header_head_pmmr.get_last_entry();
+		if let Some(entry) = header_head_pmmr.get_last_entry() {
+			if let Ok(header) = store.get_block_header(&entry.hash()) {
+				debug!(
+					"header_head: {} @ {} [{}]",
+					header.total_difficulty(),
+					header.height,
+					header.hash(),
+				);
+			} else {
+				debug!("header_head: None (no header)");
+			}
+		} else {
+			debug!("header_head: None (no last_entry)");
+		}
 
 		let sync_head_pmmr = txhashset.sync_head_pmmr();
-		let last_sync_entry = sync_head_pmmr.get_last_entry();
-		match last_sync_entry {
-			Some(entry) => {
-				let sync_header = store.get_block_header(&entry.hash())?;
+		if let Some(entry) = sync_head_pmmr.get_last_entry() {
+			if let Ok(header) = store.get_block_header(&entry.hash()) {
 				debug!(
-					"init: sync_head: {} @ {} [{}]",
-					sync_header.total_difficulty(),
-					sync_header.height,
-					sync_header.hash(),
+					"sync_head: {} @ {} [{}]",
+					header.total_difficulty(),
+					header.height,
+					header.hash(),
 				);
+			} else {
+				debug!("sync_head: None (no header)");
 			}
-			None => {
-				debug!("init: sync_head: None");
-			}
+		} else {
+			debug!("sync_head: None (no last_entry)");
 		}
 
 		Ok(())
@@ -734,7 +742,7 @@ impl Chain {
 	pub fn check_txhashset_needed(&self, hashes: &mut Option<Vec<Hash>>) -> Result<bool, Error> {
 		let horizon = global::cut_through_horizon() as u64;
 		let block_head = self.head()?;
-		let header_head = self.header_head()?;
+		let header_head = self.get_header_head()?;
 
 		Chain::log_heads(&self.store, &self.txhashset.read())?;
 
@@ -1128,12 +1136,12 @@ impl Chain {
 			.map_err(|e| ErrorKind::StoreErr(e, "chain tail".to_owned()).into())
 	}
 
-	/// Tip (head) of the header chain.
-	pub fn header_head(&self) -> Result<Tip, Error> {
-		self.store
-			.header_head()
-			.map_err(|e| ErrorKind::StoreErr(e, "chain header head".to_owned()).into())
-	}
+	// /// Tip (head) of the header chain.
+	// pub fn header_head(&self) -> Result<Tip, Error> {
+	// 	self.store
+	// 		.header_head()
+	// 		.map_err(|e| ErrorKind::StoreErr(e, "chain header head".to_owned()).into())
+	// }
 
 	/// Block header for the chain head
 	pub fn head_header(&self) -> Result<BlockHeader, Error> {
@@ -1234,16 +1242,39 @@ impl Chain {
 		}
 	}
 
-	// /// Get the tip of the current "sync" header chain.
-	// /// This may diverge significantly from current header (or block) chain.
+	/// Get the head of the current "sync" header chain.
+	/// This may diverge significantly from current header (or block) chain.
 	pub fn get_sync_head(&self) -> Result<Tip, Error> {
 		let txhashset = self.txhashset.read();
-		let sync_head_pmmr = txhashset.sync_head_pmmr();
-		let last_entry = sync_head_pmmr
-			.get_last_entry()
-			.ok_or(ErrorKind::Other(format!("no sync head").into()))?;
-		let header = self.store.get_block_header(&last_entry.hash())?;
-		Ok(Tip::from_header(&header))
+		let pmmr = txhashset.sync_head_pmmr();
+		let mut pos = pmmr.last_pos();
+		while pos > 0 {
+			if let Some(entry) = pmmr.get_data(pos) {
+				if let Ok(header) = self.store.get_block_header(&entry.hash()) {
+					return Ok(Tip::from_header(&header));
+				}
+			}
+			pos -= 1;
+		}
+		Err(ErrorKind::Other(format!("no confirmed sync head")).into())
+	}
+
+	/// TODO - Refactor this and get_sync_head (duplicate code).
+	/// Get the head of the current "header" header chain.
+	/// This may diverge from the current block chain head (during header sync for example).
+	pub fn get_header_head(&self) -> Result<Tip, Error> {
+		let txhashset = self.txhashset.read();
+		let pmmr = txhashset.header_head_pmmr();
+		let mut pos = pmmr.last_pos();
+		while pos > 0 {
+			if let Some(entry) = pmmr.get_data(pos) {
+				if let Ok(header) = self.store.get_block_header(&entry.hash()) {
+					return Ok(Tip::from_header(&header));
+				}
+			}
+			pos -= 1;
+		}
+		Err(ErrorKind::Other(format!("no confirmed header head")).into())
 	}
 
 	/// Builds an iterator on blocks starting from the current chain head and
@@ -1355,8 +1386,6 @@ fn setup_head(
 			}
 		}
 		Err(NotFoundErr(_)) => {
-			let mut sums = BlockSums::default();
-
 			// Save the genesis header with a "zero" header_root.
 			// We will update this later once we have the correct header_root.
 			batch.save_block_header(&genesis.header)?;
@@ -1367,23 +1396,21 @@ fn setup_head(
 			// Save these ahead of time as we need head and header_head to be initialized
 			// with *something* when creating a txhashset extension below.
 			batch.save_block_head(&tip)?;
-			batch.save_header_head(&tip)?;
 
-			if genesis.kernels().len() > 0 {
-				let (utxo_sum, kernel_sum) = (sums, genesis as &Committed).verify_kernel_sums(
-					genesis.header.overage(),
-					genesis.header.total_kernel_offset(),
-				)?;
-				sums = BlockSums {
+			let sums = if genesis.kernels().len() > 0 {
+				let (utxo_sum, kernel_sum) = (BlockSums::default(), genesis as &Committed)
+					.verify_kernel_sums(
+						genesis.header.overage(),
+						genesis.header.total_kernel_offset(),
+					)?;
+				BlockSums {
 					utxo_sum,
 					kernel_sum,
-				};
-			}
-			let mut header_pmmr = txhashset.header_head_pmmr_mut();
-			txhashset::header_extending(&mut header_pmmr, &mut batch, |extension| {
-				extension.apply_header(&genesis.header)?;
-				Ok(())
-			})?;
+				}
+			} else {
+				BlockSums::default()
+			};
+
 			txhashset::extending(txhashset, &mut batch, |extension| {
 				extension.apply_block(&genesis)?;
 				extension.validate_roots()?;
@@ -1398,6 +1425,33 @@ fn setup_head(
 		}
 		Err(e) => return Err(ErrorKind::StoreErr(e, "chain init load head".to_owned()))?,
 	};
+
+	// Start at last_pos and rewind header_head MMR back
+	// until we find the associated header in the db.
+	let mut pmmr_handle = txhashset.header_head_pmmr_mut();
+	txhashset::header_extending(&mut pmmr_handle, &mut batch, |extension| {
+		if let Ok(head) = extension.get_confirmed_head() {
+			let header = extension.batch.get_block_header(&head.last_block_h)?;
+			pipe::rewind_and_apply_header_fork(&header, extension)?;
+		} else {
+			extension.truncate()?;
+			extension.apply_header(&genesis.header)?;
+		}
+		Ok(())
+	})?;
+
+	// Now do the same with the sync_head MMR.
+	let mut pmmr_handle = txhashset.sync_head_pmmr_mut();
+	txhashset::header_extending(&mut pmmr_handle, &mut batch, |extension| {
+		if let Ok(head) = extension.get_confirmed_head() {
+			let header = extension.batch.get_block_header(&head.last_block_h)?;
+			pipe::rewind_and_apply_header_fork(&header, extension)?;
+		} else {
+			extension.truncate()?;
+			extension.apply_header(&genesis.header)?;
+		}
+		Ok(())
+	})?;
 
 	batch.commit()?;
 

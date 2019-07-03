@@ -119,7 +119,7 @@ impl BodySync {
 
 		if hashes_to_get.len() > 0 {
 			let block_head = self.chain.head()?;
-			let header_head = self.chain.header_head()?;
+			let header_head = self.chain.get_header_head()?;
 
 			debug!(
 				"block_sync: {}/{} requesting blocks {:?} from {} peers",

@@ -306,7 +306,7 @@ impl p2p::ChainAdapter for NetToChainAdapter {
 			None => return Ok(vec![]),
 		};
 
-		let max_height = self.chain().header_head()?.height;
+		let max_height = self.chain().get_header_head()?.height;
 
 		let txhashset = self.chain().txhashset();
 		let txhashset = txhashset.read();

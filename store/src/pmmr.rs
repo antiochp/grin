@@ -119,7 +119,7 @@ impl<T: PMMRable> Backend<T> for PMMRBackend<T> {
 
 	/// Get the data at pos.
 	/// Return None if it has been removed or if pos is not a leaf node.
-	fn get_data(&self, pos: u64) -> Option<(T::E)> {
+	fn get_data(&self, pos: u64) -> Option<T::E> {
 		if !pmmr::is_leaf(pos) {
 			return None;
 		}
@@ -127,6 +127,17 @@ impl<T: PMMRable> Backend<T> for PMMRBackend<T> {
 			return None;
 		}
 		self.get_data_from_file(pos)
+	}
+
+	/// Get the last data entry in this PMMR.
+	/// Note: Currently only works on a sync'd PMMR backend.
+	fn get_last_entry(&self) -> Option<T::E> {
+		let pos = pmmr::bintree_rightmost(self.unpruned_size());
+		if pos > 0 {
+			self.get_data(pos)
+		} else {
+			None
+		}
 	}
 
 	/// Returns an iterator over all the leaf positions.

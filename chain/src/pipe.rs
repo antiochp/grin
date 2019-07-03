@@ -180,7 +180,6 @@ pub fn sync_block_headers(
 		for header in headers {
 			extension.validate_root(header)?;
 			extension.apply_header(header)?;
-			add_block_header(header, &extension.batch)?;
 		}
 		Ok(())
 	})?;
@@ -493,30 +492,6 @@ fn update_head(head: &Tip, batch: &mut store::Batch<'_>) -> Result<(), Error> {
 // Whether the provided block totals more work than the chain tip
 fn has_more_work(header: &BlockHeader, head: &Tip) -> bool {
 	header.total_difficulty() > head.total_difficulty
-}
-
-// /// Update the sync head so we can keep syncing from where we left off.
-// fn update_sync_head(head: &Tip, batch: &mut store::Batch<'_>) -> Result<(), Error> {
-// 	batch
-// 		.save_sync_head(&head)
-// 		.map_err(|e| ErrorKind::StoreErr(e, "pipe save sync head".to_owned()))?;
-// 	debug!(
-// 		"sync_head updated to {} at {}",
-// 		head.last_block_h, head.height
-// 	);
-// 	Ok(())
-// }
-
-/// Update the header_head.
-fn update_header_head(head: &Tip, batch: &mut store::Batch<'_>) -> Result<(), Error> {
-	batch
-		.save_header_head(&head)
-		.map_err(|e| ErrorKind::StoreErr(e, "pipe save header head".to_owned()))?;
-	debug!(
-		"header_head updated to {} at {}",
-		head.last_block_h, head.height
-	);
-	Ok(())
 }
 
 /// Rewind the header chain and reapply headers on a fork.

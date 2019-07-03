@@ -183,7 +183,7 @@ impl SyncRunner {
 			// if syncing is needed
 			let head = unwrap_or_restart_loop!(self.chain.head());
 			let tail = self.chain.tail().unwrap_or_else(|_| head.clone());
-			let header_head = unwrap_or_restart_loop!(self.chain.header_head());
+			let header_head = unwrap_or_restart_loop!(self.chain.get_header_head());
 
 			// run each sync stage, each of them deciding whether they're needed
 			// except for state sync that only runs if body sync return true (means txhashset is needed)

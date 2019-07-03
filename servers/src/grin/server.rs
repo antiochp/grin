@@ -412,7 +412,7 @@ impl Server {
 
 	/// The head of the block header chain
 	pub fn header_head(&self) -> Result<chain::Tip, Error> {
-		self.chain.header_head().map_err(|e| e.into())
+		self.chain.get_header_head().map_err(|e| e.into())
 	}
 
 	/// The p2p layer protocol version for this node.

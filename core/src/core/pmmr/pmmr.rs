@@ -285,6 +285,10 @@ where
 		}
 	}
 
+	pub fn get_last_entry(&self) -> Option<T::E> {
+		self.backend.get_last_entry()
+	}
+
 	/// Get the hash from the underlying MMR file
 	/// (ignores the remove log).
 	fn get_from_file(&self, pos: u64) -> Option<Hash> {

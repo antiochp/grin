@@ -44,6 +44,8 @@ pub trait Backend<T: PMMRable> {
 	/// Get underlying data by insertion position.
 	fn get_data(&self, position: u64) -> Option<T::E>;
 
+	fn get_last_entry(&self) -> Option<T::E>;
+
 	/// Get a Hash  by original insertion position
 	/// (ignoring the remove log).
 	fn get_from_file(&self, position: u64) -> Option<Hash>;
