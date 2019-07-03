@@ -58,6 +58,10 @@ fn check_known(header: &BlockHeader, ctx: &mut BlockContext<'_>) -> Result<(), E
 	Ok(())
 }
 
+fn head(ctx: &BlockContext<'_>) -> Result<Tip, Error> {
+	ctx.txhashset.get_confirmed_head()
+}
+
 /// Runs the block processing pipeline, including validation and finding a
 /// place for the new block in the chain.
 /// Returns new head if chain head updated.
@@ -74,7 +78,7 @@ pub fn process_block(b: &Block, ctx: &mut BlockContext<'_>) -> Result<Option<Tip
 	// Check if we have already processed this block previously.
 	check_known(&b.header, ctx)?;
 
-	let head = ctx.batch.head()?;
+	let head = head(ctx)?;
 
 	let is_next = b.header.prev_hash == head.last_block_h;
 
@@ -146,10 +150,9 @@ pub fn process_block(b: &Block, ctx: &mut BlockContext<'_>) -> Result<Option<Tip
 		update_body_tail(&b.header, &ctx.batch)?;
 	}
 
+	// TODO - Consider cleaning this up?
 	if has_more_work(&b.header, &head) {
-		let head = Tip::from_header(&b.header);
-		update_head(&head, &mut ctx.batch)?;
-		Ok(Some(head))
+		Ok(Some(Tip::from_header(&b.header)))
 	} else {
 		Ok(None)
 	}
@@ -254,7 +257,7 @@ pub fn process_block_header(header: &BlockHeader, ctx: &mut BlockContext<'_>) ->
 /// Keeps duplicates from the network in check.
 /// Checks against the last_block_h and prev_block_h of the chain head.
 fn check_known_head(header: &BlockHeader, ctx: &mut BlockContext<'_>) -> Result<(), Error> {
-	let head = ctx.batch.head()?;
+	let head = head(ctx)?;
 	let bh = header.hash();
 	if bh == head.last_block_h || bh == head.prev_block_h {
 		return Err(ErrorKind::Unfit("already known in head".to_string()).into());
@@ -275,7 +278,7 @@ fn check_known_orphans(header: &BlockHeader, ctx: &mut BlockContext<'_>) -> Resu
 fn check_known_store(header: &BlockHeader, ctx: &mut BlockContext<'_>) -> Result<(), Error> {
 	match ctx.batch.block_exists(&header.hash()) {
 		Ok(true) => {
-			let head = ctx.batch.head()?;
+			let head = head(ctx)?;
 			if header.height < head.height.saturating_sub(50) {
 				// TODO - we flag this as an "abusive peer" but only in the case
 				// where we have the full block in our store.
@@ -484,15 +487,15 @@ fn add_block_header(bh: &BlockHeader, batch: &store::Batch<'_>) -> Result<(), Er
 	Ok(())
 }
 
-fn update_head(head: &Tip, batch: &mut store::Batch<'_>) -> Result<(), Error> {
-	batch
-		.save_block_head(&head)
-		.map_err(|e| ErrorKind::StoreErr(e, "pipe save body".to_owned()))?;
-
-	debug!("head updated to {} at {}", head.last_block_h, head.height);
-
-	Ok(())
-}
+// fn update_head(head: &Tip, batch: &mut store::Batch<'_>) -> Result<(), Error> {
+// 	batch
+// 		.save_block_head(&head)
+// 		.map_err(|e| ErrorKind::StoreErr(e, "pipe save body".to_owned()))?;
+//
+// 	debug!("head updated to {} at {}", head.last_block_h, head.height);
+//
+// 	Ok(())
+// }
 
 // Whether the provided block totals more work than the chain tip
 fn has_more_work(header: &BlockHeader, head: &Tip) -> bool {

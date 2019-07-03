@@ -228,6 +228,19 @@ impl TxHashSet {
 		self.kernel_pmmr_h.backend.release_files();
 	}
 
+	pub fn get_confirmed_head(&self) -> Result<Tip, Error> {
+		let mut pos = self.block_head_pmmr_h.last_pos();
+		while pos > 0 {
+			if let Some(entry) = self.block_head_pmmr_h.get_data(pos) {
+				if let Ok(header) = self.commit_index.get_block_header(&entry.hash()) {
+					return Ok(Tip::from_header(&header));
+				}
+			}
+			pos -= 1;
+		}
+		Err(ErrorKind::Other(format!("no confirmed head")).into())
+	}
+
 	/// Check if an output is unspent.
 	/// We look in the index to find the output MMR pos.
 	/// Then we check the entry in the output MMR and confirm the hash matches.
@@ -359,14 +372,15 @@ impl TxHashSet {
 	pub fn compact(&mut self, batch: &mut Batch<'_>) -> Result<(), Error> {
 		debug!("txhashset: starting compaction...");
 
-		let head_header = batch.head_header()?;
-		let current_height = head_header.height;
+		let head = self.get_confirmed_head()?;
+		let current_height = head.height;
 
 		// horizon for compacting is based on current_height
 		let horizon_height = current_height.saturating_sub(global::cut_through_horizon().into());
 		let horizon_hash = self.get_header_hash_by_height(horizon_height)?;
 		let horizon_header = batch.get_block_header(&horizon_hash)?;
 
+		let head_header = batch.get_block_header(&head.last_block_h)?;
 		let rewind_rm_pos = input_pos_to_rewind(&horizon_header, &head_header, batch)?;
 
 		debug!("txhashset: check_compact output mmr backend...");
@@ -398,14 +412,10 @@ where
 	let commit_index = trees.commit_index.clone();
 	let batch = commit_index.batch()?;
 
-	// We want to use the current head of the most work chain unless
-	// we explicitly rewind the extension.
-	let header = batch.head_header()?;
-
 	trace!("Starting new txhashset (readonly) extension.");
 
 	let res = {
-		let mut extension = Extension::new(trees, &batch, header);
+		let mut extension = Extension::new(trees, &batch);
 		extension.force_rollback();
 		inner(&mut extension)
 	};
@@ -455,19 +465,16 @@ pub fn rewindable_kernel_view<F, T>(trees: &TxHashSet, inner: F) -> Result<T, Er
 where
 	F: FnOnce(&mut RewindableKernelView<'_>) -> Result<T, Error>,
 {
-	let res: Result<T, Error>;
-	{
-		let kernel_pmmr =
-			RewindablePMMR::at(&trees.kernel_pmmr_h.backend, trees.kernel_pmmr_h.last_pos);
+	let kernel_pmmr =
+		RewindablePMMR::at(&trees.kernel_pmmr_h.backend, trees.kernel_pmmr_h.last_pos);
 
-		// Create a new batch here to pass into the kernel_view.
-		// Discard it (rollback) after we finish with the kernel_view.
-		let batch = trees.commit_index.batch()?;
-		let header = batch.head_header()?;
-		let mut view = RewindableKernelView::new(kernel_pmmr, &batch, header);
-		res = inner(&mut view);
-	}
-	res
+	// Create a new batch here to pass into the kernel_view.
+	// Discard it (rollback) after we finish with the kernel_view.
+	let batch = trees.commit_index.batch()?;
+	let head = trees.get_confirmed_head()?;
+	let header = batch.get_block_header(&head.last_block_h)?;
+	let mut view = RewindableKernelView::new(kernel_pmmr, &batch, header);
+	inner(&mut view)
 }
 
 /// Starts a new unit of work to extend the chain with additional blocks,
@@ -485,17 +492,9 @@ pub fn extending<'a, F, T>(
 where
 	F: FnOnce(&mut Extension<'_>) -> Result<T, Error>,
 {
-	// We want to use the current head of the most work chain unless
-	// we explicitly rewind the extension.
-	let header = batch.head_header()?;
-
-	// create a child transaction so if the state is rolled back by itself, all
-	// index saving can be undone
 	let child_batch = batch.child()?;
-
-	let mut extension = Extension::new(trees, &child_batch, header);
+	let mut extension = Extension::new(trees, &child_batch);
 	let res = inner(&mut extension);
-
 	if res.is_err() || extension.rollback() {
 		trees.block_head_pmmr_h.backend.discard();
 		trees.output_pmmr_h.backend.discard();
@@ -573,7 +572,6 @@ impl<'a> HeaderExtension<'a> {
 		self.pmmr.get_data(pos).map(|x| x.hash())
 	}
 
-	/// TODO - Rename this and get_head()
 	pub fn get_head_hash(&self) -> Result<Hash, Error> {
 		let last_entry = self
 			.pmmr
@@ -692,8 +690,6 @@ impl<'a> HeaderExtension<'a> {
 /// reversible manner within a unit of work provided by the `extending`
 /// function.
 pub struct Extension<'a> {
-	header: BlockHeader,
-
 	header_pmmr: PMMR<'a, BlockHeader, PMMRBackend<BlockHeader>>,
 	output_pmmr: PMMR<'a, Output, PMMRBackend<Output>>,
 	rproof_pmmr: PMMR<'a, RangeProof, PMMRBackend<RangeProof>>,
@@ -737,9 +733,8 @@ impl<'a> Committed for Extension<'a> {
 }
 
 impl<'a> Extension<'a> {
-	fn new(trees: &'a mut TxHashSet, batch: &'a Batch<'_>, header: BlockHeader) -> Extension<'a> {
+	fn new(trees: &'a mut TxHashSet, batch: &'a Batch<'_>) -> Extension<'a> {
 		Extension {
-			header,
 			header_pmmr: PMMR::at(
 				&mut trees.block_head_pmmr_h.backend,
 				trees.block_head_pmmr_h.last_pos,
@@ -759,6 +754,19 @@ impl<'a> Extension<'a> {
 			rollback: false,
 			batch,
 		}
+	}
+
+	pub fn get_confirmed_head(&self) -> Result<Tip, Error> {
+		let mut pos = self.header_pmmr.last_pos;
+		while pos > 0 {
+			if let Some(entry) = self.header_pmmr.get_data(pos) {
+				if let Ok(header) = self.batch.get_block_header(&entry.hash()) {
+					return Ok(Tip::from_header(&header));
+				}
+			}
+			pos -= 1;
+		}
+		Err(ErrorKind::Other(format!("no confirmed head")).into())
 	}
 
 	/// Build a view of the current UTXO set based on the output PMMR.
@@ -794,9 +802,6 @@ impl<'a> Extension<'a> {
 		for kernel in b.kernels() {
 			self.apply_kernel(kernel)?;
 		}
-
-		// Update the header on the extension to reflect the block we just applied.
-		self.header = b.header.clone();
 
 		Ok(())
 	}
@@ -940,11 +945,13 @@ impl<'a> Extension<'a> {
 	/// Needed for fast-sync (utxo file needs to be rewound before sending
 	/// across).
 	pub fn snapshot(&mut self) -> Result<(), Error> {
+		let head = self.get_confirmed_head()?;
+		let header = self.batch.get_block_header(&head.last_block_h)?;
 		self.output_pmmr
-			.snapshot(&self.header)
+			.snapshot(&header)
 			.map_err(|e| ErrorKind::Other(e))?;
 		self.rproof_pmmr
-			.snapshot(&self.header)
+			.snapshot(&header)
 			.map_err(|e| ErrorKind::Other(e))?;
 		Ok(())
 	}
@@ -954,13 +961,16 @@ impl<'a> Extension<'a> {
 	pub fn rewind(&mut self, header: &BlockHeader) -> Result<(), Error> {
 		debug!("Rewind extension to {} at {}", header.hash(), header.height,);
 
+		let head = self.get_confirmed_head()?;
+		let head_header = self.batch.get_block_header(&head.last_block_h)?;
+
 		// We need to build bitmaps of added and removed output positions
 		// so we can correctly rewind all operations applied to the output MMR
 		// after the position we are rewinding to (these operations will be
 		// undone during rewind).
 		// Rewound output pos will be removed from the MMR.
 		// Rewound input (spent) pos will be added back to the MMR.
-		let rewind_rm_pos = input_pos_to_rewind(header, &self.header, &self.batch)?;
+		let rewind_rm_pos = input_pos_to_rewind(header, &head_header, &self.batch)?;
 
 		let header_pos = pmmr::insertion_to_pmmr_index(header.height + 1);
 
@@ -970,9 +980,6 @@ impl<'a> Extension<'a> {
 			header.kernel_mmr_size,
 			&rewind_rm_pos,
 		)?;
-
-		// Update our header to reflect the one we rewound to.
-		self.header = header.clone();
 
 		Ok(())
 	}
@@ -1033,15 +1040,18 @@ impl<'a> Extension<'a> {
 	/// not including the header itself.
 	///
 	pub fn validate_roots(&self) -> Result<(), Error> {
+		let head = self.get_confirmed_head()?;
+		let header = self.batch.get_block_header(&head.last_block_h)?;
+
 		// If we are validating the genesis block then we have no outputs or
 		// kernels. So we are done here.
-		if self.header.height == 0 {
+		if head.height == 0 {
 			return Ok(());
 		}
 		let roots = self.roots();
-		if roots.output_root != self.header.output_root
-			|| roots.rproof_root != self.header.range_proof_root
-			|| roots.kernel_root != self.header.kernel_root
+		if roots.output_root != header.output_root
+			|| roots.rproof_root != header.range_proof_root
+			|| roots.kernel_root != header.kernel_root
 		{
 			Err(ErrorKind::InvalidRoot.into())
 		} else {
@@ -1065,20 +1075,23 @@ impl<'a> Extension<'a> {
 
 	/// Validate the header, output and kernel MMR sizes against the block header.
 	pub fn validate_sizes(&self) -> Result<(), Error> {
+		let head = self.get_confirmed_head()?;
+		let header = self.batch.get_block_header(&head.last_block_h)?;
+
 		// If we are validating the genesis block then we have no outputs or
 		// kernels. So we are done here.
-		if self.header.height == 0 {
+		if head.height == 0 {
 			return Ok(());
 		}
 
 		let (header_mmr_size, output_mmr_size, rproof_mmr_size, kernel_mmr_size) = self.sizes();
-		let expected_header_mmr_size = pmmr::insertion_to_pmmr_index(self.header.height + 2) - 1;
+		let expected_header_mmr_size = pmmr::insertion_to_pmmr_index(head.height + 2) - 1;
 
 		if header_mmr_size != expected_header_mmr_size {
 			Err(ErrorKind::InvalidMMRSize.into())
-		} else if output_mmr_size != self.header.output_mmr_size {
+		} else if output_mmr_size != header.output_mmr_size {
 			Err(ErrorKind::InvalidMMRSize.into())
-		} else if kernel_mmr_size != self.header.kernel_mmr_size {
+		} else if kernel_mmr_size != header.kernel_mmr_size {
 			Err(ErrorKind::InvalidMMRSize.into())
 		} else if output_mmr_size != rproof_mmr_size {
 			Err(ErrorKind::InvalidMMRSize.into())
@@ -1123,10 +1136,13 @@ impl<'a> Extension<'a> {
 	pub fn validate_kernel_sums(&self) -> Result<((Commitment, Commitment)), Error> {
 		let now = Instant::now();
 
+		let head = self.get_confirmed_head()?;
+		let header = self.batch.get_block_header(&head.last_block_h)?;
+
 		let genesis = self.get_header_by_height(0)?;
 		let (utxo_sum, kernel_sum) = self.verify_kernel_sums(
-			self.header.total_overage(genesis.kernel_mmr_size > 0),
-			self.header.total_kernel_offset(),
+			header.total_overage(genesis.kernel_mmr_size > 0),
+			header.total_kernel_offset(),
 		)?;
 
 		debug!(
@@ -1144,11 +1160,13 @@ impl<'a> Extension<'a> {
 		fast_validation: bool,
 		status: &dyn TxHashsetWriteStatus,
 	) -> Result<((Commitment, Commitment)), Error> {
+		let head = self.get_confirmed_head()?;
+
 		self.validate_mmrs()?;
 		self.validate_roots()?;
 		self.validate_sizes()?;
 
-		if self.header.height == 0 {
+		if head.height == 0 {
 			let zero_commit = secp_static::commit_to_zero_value();
 			return Ok((zero_commit.clone(), zero_commit.clone()));
 		}

@@ -29,7 +29,6 @@ const STORE_SUBPATH: &'static str = "chain";
 
 const BLOCK_HEADER_PREFIX: u8 = 'h' as u8;
 const BLOCK_PREFIX: u8 = 'b' as u8;
-const HEAD_PREFIX: u8 = 'H' as u8;
 const TAIL_PREFIX: u8 = 'T' as u8;
 const COMMIT_POS_PREFIX: u8 = 'c' as u8;
 const BLOCK_INPUT_BITMAP_PREFIX: u8 = 'B' as u8;
@@ -49,19 +48,9 @@ impl ChainStore {
 }
 
 impl ChainStore {
-	/// The current chain head.
-	pub fn head(&self) -> Result<Tip, Error> {
-		option_to_not_found(self.db.get_ser(&vec![HEAD_PREFIX]), "HEAD")
-	}
-
 	/// The current chain "tail" (earliest block in the store).
 	pub fn tail(&self) -> Result<Tip, Error> {
 		option_to_not_found(self.db.get_ser(&vec![TAIL_PREFIX]), "TAIL")
-	}
-
-	/// Header of the block at the head of the block chain (not the same thing as header_head).
-	pub fn head_header(&self) -> Result<BlockHeader, Error> {
-		self.get_block_header(&self.head()?.last_block_h)
 	}
 
 	/// Get full block.
@@ -123,24 +112,9 @@ pub struct Batch<'a> {
 }
 
 impl<'a> Batch<'a> {
-	/// The head.
-	pub fn head(&self) -> Result<Tip, Error> {
-		option_to_not_found(self.db.get_ser(&vec![HEAD_PREFIX]), "HEAD")
-	}
-
 	/// The tail.
 	pub fn tail(&self) -> Result<Tip, Error> {
 		option_to_not_found(self.db.get_ser(&vec![TAIL_PREFIX]), "TAIL")
-	}
-
-	/// Header of the block at the head of the block chain (not the same thing as header_head).
-	pub fn head_header(&self) -> Result<BlockHeader, Error> {
-		self.get_block_header(&self.head()?.last_block_h)
-	}
-
-	/// Save block head to db.
-	pub fn save_block_head(&self, t: &Tip) -> Result<(), Error> {
-		self.db.put_ser(&vec![HEAD_PREFIX], t)
 	}
 
 	/// Save body "tail" to db.

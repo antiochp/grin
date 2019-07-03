@@ -203,17 +203,24 @@ impl Chain {
 		store: &store::ChainStore,
 		txhashset: &'a txhashset::TxHashSet,
 	) -> Result<(), Error> {
-		let head = store.head()?;
-		debug!(
-			"init: block_head: {} @ {} [{}]",
-			head.total_difficulty.to_num(),
-			head.height,
-			head.last_block_h,
-		);
+		let pmmr = txhashset.block_head_pmmr();
+		if let Some(entry) = pmmr.get_last_entry() {
+			if let Ok(header) = store.get_block_header(&entry.hash()) {
+				debug!(
+					"head: {} @ {} [{}]",
+					header.total_difficulty(),
+					header.height,
+					header.hash(),
+				);
+			} else {
+				debug!("head: None (no header)");
+			}
+		} else {
+			debug!("head: None (no last_entry)");
+		}
 
-		let header_head_pmmr = txhashset.header_head_pmmr();
-		let last_header_entry = header_head_pmmr.get_last_entry();
-		if let Some(entry) = header_head_pmmr.get_last_entry() {
+		let pmmr = txhashset.header_head_pmmr();
+		if let Some(entry) = pmmr.get_last_entry() {
 			if let Ok(header) = store.get_block_header(&entry.hash()) {
 				debug!(
 					"header_head: {} @ {} [{}]",
@@ -228,8 +235,8 @@ impl Chain {
 			debug!("header_head: None (no last_entry)");
 		}
 
-		let sync_head_pmmr = txhashset.sync_head_pmmr();
-		if let Some(entry) = sync_head_pmmr.get_last_entry() {
+		let pmmr = txhashset.sync_head_pmmr();
+		if let Some(entry) = pmmr.get_last_entry() {
 			if let Ok(header) = store.get_block_header(&entry.hash()) {
 				debug!(
 					"sync_head: {} @ {} [{}]",
@@ -285,17 +292,12 @@ impl Chain {
 	fn process_block_single(&self, b: Block, opts: Options) -> Result<Option<Tip>, Error> {
 		let (maybe_new_head, prev_head) = {
 			let mut txhashset = self.txhashset.write();
+			let prev_head = txhashset.get_confirmed_head()?;
+
 			let batch = self.store.batch()?;
 			let mut ctx = self.new_ctx(opts, batch, &mut txhashset)?;
 
-			let prev_head = ctx.batch.head()?;
-
 			let maybe_new_head = pipe::process_block(&b, &mut ctx);
-
-			// We have flushed txhashset extension changes to disk
-			// but not yet committed the batch.
-			// A node shutdown at this point can be catastrophic...
-			// We prevent this via the stop_lock (see above).
 			if let Ok(_) = maybe_new_head {
 				ctx.batch.commit()?;
 			}
@@ -496,8 +498,8 @@ impl Chain {
 	}
 
 	fn next_block_height(&self) -> Result<u64, Error> {
-		let bh = self.head_header()?;
-		Ok(bh.height + 1)
+		let head = self.head()?;
+		Ok(head.height + 1)
 	}
 
 	/// Verify we are not attempting to spend a coinbase output
@@ -524,14 +526,13 @@ impl Chain {
 
 	/// Validate the current chain state.
 	pub fn validate(&self, fast_validation: bool) -> Result<(), Error> {
-		let header = self.store.head_header()?;
+		let mut txhashset = self.txhashset.write();
 
-		// Lets just treat an "empty" node that just got started up as valid.
-		if header.height == 0 {
+		let head = txhashset.get_confirmed_head()?;
+		if head.height == 0 {
 			return Ok(());
 		}
-
-		let mut txhashset = self.txhashset.write();
+		let header = self.store.get_block_header(&head.last_block_h)?;
 
 		// Now create an extension from the txhashset and validate against the
 		// latest block header. Rewind the extension to the specified header to
@@ -917,10 +918,9 @@ impl Chain {
 
 		status.on_save();
 
-		// Save the new head to the db and rebuild the header by height index.
 		{
 			let tip = Tip::from_header(&header);
-			batch.save_block_head(&tip)?;
+			// batch.save_block_head(&tip)?;
 
 			// Reset the body tail to the body head after a txhashset write
 			batch.save_body_tail(&tip)?;
@@ -979,7 +979,7 @@ impl Chain {
 		}
 
 		let horizon = global::cut_through_horizon() as u64;
-		let head = batch.head()?;
+		let head = txhashset.get_confirmed_head()?;
 
 		let tail = match batch.tail() {
 			Ok(tail) => tail,
@@ -1122,13 +1122,6 @@ impl Chain {
 		self.orphans.len()
 	}
 
-	/// Tip (head) of the block chain.
-	pub fn head(&self) -> Result<Tip, Error> {
-		self.store
-			.head()
-			.map_err(|e| ErrorKind::StoreErr(e, "chain head".to_owned()).into())
-	}
-
 	/// Tail of the block chain in this node after compact (cross-block cut-through)
 	pub fn tail(&self) -> Result<Tip, Error> {
 		self.store
@@ -1136,18 +1129,10 @@ impl Chain {
 			.map_err(|e| ErrorKind::StoreErr(e, "chain tail".to_owned()).into())
 	}
 
-	// /// Tip (head) of the header chain.
-	// pub fn header_head(&self) -> Result<Tip, Error> {
-	// 	self.store
-	// 		.header_head()
-	// 		.map_err(|e| ErrorKind::StoreErr(e, "chain header head".to_owned()).into())
-	// }
-
 	/// Block header for the chain head
 	pub fn head_header(&self) -> Result<BlockHeader, Error> {
-		self.store
-			.head_header()
-			.map_err(|e| ErrorKind::StoreErr(e, "chain head header".to_owned()).into())
+		let head = self.head()?;
+		self.get_block_header(&head.last_block_h)
 	}
 
 	/// Gets a block header by hash
@@ -1206,7 +1191,7 @@ impl Chain {
 
 		let mut min = 0;
 		let mut max = {
-			let head = self.head()?;
+			let head = txhashset.get_confirmed_head()?;
 			head.height
 		};
 
@@ -1277,6 +1262,11 @@ impl Chain {
 		Err(ErrorKind::Other(format!("no confirmed header head")).into())
 	}
 
+	pub fn head(&self) -> Result<Tip, Error> {
+		let txhashset = self.txhashset.read();
+		txhashset.get_confirmed_head()
+	}
+
 	/// Builds an iterator on blocks starting from the current chain head and
 	/// running backward. Specialized to return information pertaining to block
 	/// difficulty calculation (timestamp and previous difficulties).
@@ -1302,8 +1292,8 @@ fn setup_head(
 	let mut batch = store.batch()?;
 
 	// check if we have a head in store, otherwise the genesis block is it
-	let head_res = batch.head();
-	let mut head: Tip;
+	let head_res = txhashset.get_confirmed_head();
+	let head: Tip;
 	match head_res {
 		Ok(h) => {
 			head = h;
@@ -1378,24 +1368,18 @@ fn setup_head(
 					// We may have corrupted the MMR backend files last time we stopped the
 					// node. If this appears to be the case revert the head to the previous
 					// header and try again
-					let prev_header = batch.get_block_header(&head.prev_block_h)?;
+					// let prev_header = batch.get_block_header(&head.prev_block_h)?;
 					let _ = batch.delete_block(&header.hash());
-					head = Tip::from_header(&prev_header);
-					batch.save_block_head(&head)?;
+					// head = Tip::from_header(&prev_header);
+					// batch.save_block_head(&head)?;
 				}
 			}
 		}
-		Err(NotFoundErr(_)) => {
-			// Save the genesis header with a "zero" header_root.
-			// We will update this later once we have the correct header_root.
+		Err(_) => {
 			batch.save_block_header(&genesis.header)?;
 			batch.save_block(&genesis)?;
 
 			let tip = Tip::from_header(&genesis.header);
-
-			// Save these ahead of time as we need head and header_head to be initialized
-			// with *something* when creating a txhashset extension below.
-			batch.save_block_head(&tip)?;
 
 			let sums = if genesis.kernels().len() > 0 {
 				let (utxo_sum, kernel_sum) = (BlockSums::default(), genesis as &Committed)
@@ -1423,7 +1407,6 @@ fn setup_head(
 
 			info!("init: saved genesis: {:?}", genesis.hash());
 		}
-		Err(e) => return Err(ErrorKind::StoreErr(e, "chain init load head".to_owned()))?,
 	};
 
 	// Start at last_pos and rewind header_head MMR back
