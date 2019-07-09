@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use self::chain::{Error, Tip};
+use self::chain::Error;
 use self::core::core::hash::Hashed;
 use self::core::core::Block;
 use self::core::global::{self, ChainTypes};
@@ -34,10 +34,6 @@ fn setup_chain(genesis: &Block, chain_store: Arc<chain::store::ChainStore>) -> R
 	let batch = chain_store.batch()?;
 	batch.save_block_header(&genesis.header)?;
 	batch.save_block(&genesis)?;
-	let head = Tip::from_header(&genesis.header);
-	batch.save_block_head(&head)?;
-	// batch.save_header_head(&head)?;
-	batch.save_block_header(&genesis.header)?;
 	batch.commit()?;
 	Ok(())
 }

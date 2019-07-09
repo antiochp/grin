@@ -538,7 +538,7 @@ impl Chain {
 		// latest block header. Rewind the extension to the specified header to
 		// ensure the view is consistent.
 		txhashset::extending_readonly(&mut txhashset, |extension| {
-			pipe::rewind_and_apply_fork(&header, extension)?;
+			pipe::rewind_and_apply_block(&header, extension)?;
 			extension.validate(fast_validation, &NoStatus)?;
 			Ok(())
 		})
@@ -551,7 +551,7 @@ impl Chain {
 		let (prev_root, roots, sizes) =
 			txhashset::extending_readonly(&mut txhashset, |extension| {
 				let previous_header = extension.batch.get_previous_header(&b.header)?;
-				pipe::rewind_and_apply_fork(&previous_header, extension)?;
+				pipe::rewind_and_apply_block(&previous_header, extension)?;
 
 				// Retrieve the header root before we apply the new block
 				let prev_root = extension.header_root();
@@ -589,7 +589,7 @@ impl Chain {
 	) -> Result<MerkleProof, Error> {
 		let mut txhashset = self.txhashset.write();
 		let merkle_proof = txhashset::extending_readonly(&mut txhashset, |extension| {
-			pipe::rewind_and_apply_fork(&header, extension)?;
+			pipe::rewind_and_apply_block(&header, extension)?;
 			extension.merkle_proof(output)
 		})?;
 
@@ -644,7 +644,7 @@ impl Chain {
 		{
 			let mut txhashset = self.txhashset.write();
 			txhashset::extending_readonly(&mut txhashset, |extension| {
-				pipe::rewind_and_apply_fork(&header, extension)?;
+				pipe::rewind_and_apply_block(&header, extension)?;
 				extension.snapshot()?;
 				Ok(())
 			})?;
@@ -706,7 +706,7 @@ impl Chain {
 		})?;
 		txhashset::header_extending(&mut header_pmmr, &mut batch, |extension| {
 			let header = extension.batch.get_block_header(&head.last_block_h)?;
-			pipe::rewind_and_apply_header_fork(&header, extension)?;
+			pipe::rewind_and_apply_header(&header, extension)?;
 			Ok(())
 		})?;
 		batch.commit()?;
@@ -732,7 +732,7 @@ impl Chain {
 		})?;
 		txhashset::header_extending(&mut pmmr_handle, &mut batch, |extension| {
 			let header = extension.batch.get_block_header(&head.last_block_h)?;
-			pipe::rewind_and_apply_header_fork(&header, extension)?;
+			pipe::rewind_and_apply_header(&header, extension)?;
 			Ok(())
 		})?;
 		batch.commit()?;
@@ -1262,6 +1262,7 @@ impl Chain {
 		Err(ErrorKind::Other(format!("no confirmed header head")).into())
 	}
 
+	/// The current "confirmed" head of the full block chain.
 	pub fn head(&self) -> Result<Tip, Error> {
 		let txhashset = self.txhashset.read();
 		txhashset.get_confirmed_head()
@@ -1320,13 +1321,13 @@ fn setup_head(
 				{
 					let mut pmmr_handle = txhashset.block_head_pmmr_mut();
 					txhashset::header_extending(&mut pmmr_handle, &mut batch, |extension| {
-						pipe::rewind_and_apply_header_fork(&header, extension)?;
+						pipe::rewind_and_apply_header(&header, extension)?;
 						Ok(())
 					})?;
 				}
 
 				let res = txhashset::extending(txhashset, &mut batch, |extension| {
-					pipe::rewind_and_apply_fork(&header, extension)?;
+					pipe::rewind_and_apply_block(&header, extension)?;
 					extension.validate_roots()?;
 
 					// now check we have the "block sums" for the block in question
@@ -1415,7 +1416,7 @@ fn setup_head(
 	txhashset::header_extending(&mut pmmr_handle, &mut batch, |extension| {
 		if let Ok(head) = extension.get_confirmed_head() {
 			let header = extension.batch.get_block_header(&head.last_block_h)?;
-			pipe::rewind_and_apply_header_fork(&header, extension)?;
+			pipe::rewind_and_apply_header(&header, extension)?;
 		} else {
 			extension.truncate()?;
 			extension.apply_header(&genesis.header)?;
@@ -1428,7 +1429,7 @@ fn setup_head(
 	txhashset::header_extending(&mut pmmr_handle, &mut batch, |extension| {
 		if let Ok(head) = extension.get_confirmed_head() {
 			let header = extension.batch.get_block_header(&head.last_block_h)?;
-			pipe::rewind_and_apply_header_fork(&header, extension)?;
+			pipe::rewind_and_apply_header(&header, extension)?;
 		} else {
 			extension.truncate()?;
 			extension.apply_header(&genesis.header)?;
