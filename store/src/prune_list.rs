@@ -96,6 +96,13 @@ impl PruneList {
 		Ok(prune_list)
 	}
 
+	pub fn clear(&mut self) {
+		self.bitmap = Bitmap::create();
+		self.pruned_cache = Bitmap::create();
+		self.shift_cache.clear();
+		self.leaf_shift_cache.clear();
+	}
+
 	fn init_caches(&mut self) {
 		self.build_shift_cache();
 		self.build_leaf_shift_cache();

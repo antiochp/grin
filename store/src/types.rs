@@ -19,6 +19,7 @@ use crate::core::ser::{
 	self, BinWriter, FixedLength, ProtocolVersion, Readable, Reader, StreamingReader, Writeable,
 	Writer,
 };
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, BufWriter, Seek, SeekFrom, Write};
@@ -114,8 +115,16 @@ where
 	}
 
 	/// Rewind the backend file to the specified position.
+	/// Note: If we rewind all the way back to pos 0 (1-indexed) we truncate all the data.
 	pub fn rewind(&mut self, position: u64) {
-		self.file.rewind(position)
+		if position == 0 {
+			return self.truncate();
+		}
+		self.file.rewind(position - 1)
+	}
+
+	pub fn truncate(&mut self) {
+		self.file.truncate()
 	}
 
 	/// Flush unsynced changes to the file to disk.
@@ -313,18 +322,42 @@ where
 		}
 	}
 
-	/// Rewinds the data file back to a previous position.
-	/// We simply "rewind" the buffer_start_pos to the specified position.
-	/// Note: We do not currently support rewinding within the buffer itself.
-	pub fn rewind(&mut self, pos: u64) {
-		if let SizeInfo::VariableSize(ref mut size_file) = &mut self.size_info {
-			size_file.rewind(pos);
-		}
-
+	pub fn truncate(&mut self) {
 		if self.buffer_start_pos_bak == 0 {
 			self.buffer_start_pos_bak = self.buffer_start_pos;
 		}
-		self.buffer_start_pos = pos;
+		self.buffer_start_pos = 0;
+
+		if let SizeInfo::VariableSize(ref mut size_file) = &mut self.size_info {
+			size_file.truncate();
+		}
+	}
+
+	/// Rewinds the data file back to a previous position.
+	/// We simply "rewind" the buffer_start_pos to the next pos.
+	pub fn rewind(&mut self, pos: u64) {
+		if pos >= self.buffer_start_pos {
+			// Here be dragons, we are rewinding within an existing buffer, proceed carefully.
+			let last_pos = self.size_unsync_in_elmts().unwrap() - 1;
+			let bytes_to_keep: usize = (self.buffer_start_pos..(pos + 1))
+				.into_iter()
+				.map(|x| {
+					let (_, size) = self.offset_and_size(x).unwrap();
+					size as usize
+				})
+				.sum();
+			self.buffer.truncate(bytes_to_keep);
+		} else {
+			if self.buffer_start_pos_bak == 0 {
+				self.buffer_start_pos_bak = self.buffer_start_pos;
+			}
+			self.buffer_start_pos = pos + 1;
+			self.buffer.clear();
+		}
+
+		if let SizeInfo::VariableSize(ref mut size_file) = &mut self.size_info {
+			size_file.rewind(pos);
+		}
 	}
 
 	/// Syncs all writes (fsync), reallocating the memory map to make the newly

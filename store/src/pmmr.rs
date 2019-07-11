@@ -146,6 +146,16 @@ impl<T: PMMRable> Backend<T> for PMMRBackend<T> {
 			.map_err(|_| format!("Failed to build temp data file"))
 	}
 
+	fn truncate(&mut self) -> Result<(), String> {
+		if self.prunable {
+			self.leaf_set.clear();
+			self.prune_list.clear();
+		}
+		self.hash_file.truncate();
+		self.data_file.truncate();
+		Ok(())
+	}
+
 	/// Rewind the PMMR backend to the given position.
 	fn rewind(&mut self, position: u64, rewind_rm_pos: &Bitmap) -> Result<(), String> {
 		// First rewind the leaf_set with the necessary added and removed positions.

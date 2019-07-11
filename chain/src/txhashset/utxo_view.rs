@@ -26,7 +26,6 @@ use grin_store::pmmr::PMMRBackend;
 /// Readonly view of the UTXO set (based on output MMR).
 pub struct UTXOView<'a> {
 	output_pmmr: ReadonlyPMMR<'a, Output, PMMRBackend<Output>>,
-	header_pmmr: ReadonlyPMMR<'a, BlockHeader, PMMRBackend<BlockHeader>>,
 	batch: &'a Batch<'a>,
 }
 
@@ -34,14 +33,9 @@ impl<'a> UTXOView<'a> {
 	/// Build a new UTXO view.
 	pub fn new(
 		output_pmmr: ReadonlyPMMR<'a, Output, PMMRBackend<Output>>,
-		header_pmmr: ReadonlyPMMR<'a, BlockHeader, PMMRBackend<BlockHeader>>,
 		batch: &'a Batch<'_>,
 	) -> UTXOView<'a> {
-		UTXOView {
-			output_pmmr,
-			header_pmmr,
-			batch,
-		}
+		UTXOView { output_pmmr, batch }
 	}
 
 	/// Validate a block against the current UTXO set.
@@ -100,7 +94,11 @@ impl<'a> UTXOView<'a> {
 
 	/// Verify we are not attempting to spend any coinbase outputs
 	/// that have not sufficiently matured.
-	pub fn verify_coinbase_maturity(&self, inputs: &Vec<Input>, height: u64) -> Result<(), Error> {
+	pub fn verify_coinbase_maturity(
+		&self,
+		inputs: &Vec<Input>,
+		cutoff_header: &BlockHeader,
+	) -> Result<(), Error> {
 		// Find the greatest output pos of any coinbase
 		// outputs we are attempting to spend.
 		let pos = inputs
@@ -111,16 +109,18 @@ impl<'a> UTXOView<'a> {
 			.unwrap_or(0);
 
 		if pos > 0 {
-			// If we have not yet reached 1,000 / 1,440 blocks then
-			// we can fail immediately as coinbase cannot be mature.
-			if height < global::coinbase_maturity() {
-				return Err(ErrorKind::ImmatureCoinbase.into());
-			}
+			// // If we have not yet reached 1,000 / 1,440 blocks then
+			// // we can fail immediately as coinbase cannot be mature.
+			// if height < global::coinbase_maturity() {
+			// 	return Err(ErrorKind::ImmatureCoinbase.into());
+			// }
 
 			// Find the "cutoff" pos in the output MMR based on the
 			// header from 1,000 blocks ago.
-			let cutoff_height = height.checked_sub(global::coinbase_maturity()).unwrap_or(0);
-			let cutoff_header = self.get_header_by_height(cutoff_height)?;
+
+			// let cutoff_height = height.checked_sub(global::coinbase_maturity()).unwrap_or(0);
+			// let cutoff_header = self.get_header_by_height(cutoff_height)?;
+
 			let cutoff_pos = cutoff_header.output_mmr_size;
 
 			// If any output pos exceed the cutoff_pos
@@ -133,21 +133,21 @@ impl<'a> UTXOView<'a> {
 		Ok(())
 	}
 
-	/// Get the header hash for the specified pos from the underlying MMR backend.
-	fn get_header_hash(&self, pos: u64) -> Option<Hash> {
-		self.header_pmmr.get_data(pos).map(|x| x.hash())
-	}
+	// /// Get the header hash for the specified pos from the underlying MMR backend.
+	// fn get_header_hash(&self, pos: u64) -> Option<Hash> {
+	// 	self.header_pmmr.get_data(pos).map(|x| x.hash())
+	// }
 
-	/// Get the header at the specified height based on the current state of the extension.
-	/// Derives the MMR pos from the height (insertion index) and retrieves the header hash.
-	/// Looks the header up in the db by hash.
-	pub fn get_header_by_height(&self, height: u64) -> Result<BlockHeader, Error> {
-		let pos = pmmr::insertion_to_pmmr_index(height + 1);
-		if let Some(hash) = self.get_header_hash(pos) {
-			let header = self.batch.get_block_header(&hash)?;
-			Ok(header)
-		} else {
-			Err(ErrorKind::Other(format!("get header by height")).into())
-		}
-	}
+	// /// Get the header at the specified height based on the current state of the extension.
+	// /// Derives the MMR pos from the height (insertion index) and retrieves the header hash.
+	// /// Looks the header up in the db by hash.
+	// pub fn get_header_by_height(&self, height: u64) -> Result<BlockHeader, Error> {
+	// 	let pos = pmmr::insertion_to_pmmr_index(height + 1);
+	// 	if let Some(hash) = self.get_header_hash(pos) {
+	// 		let header = self.batch.get_block_header(&hash)?;
+	// 		Ok(header)
+	// 	} else {
+	// 		Err(ErrorKind::Other(format!("get header by height")).into())
+	// 	}
+	// }
 }

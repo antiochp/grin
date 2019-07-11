@@ -146,6 +146,10 @@ impl LeafSet {
 		self.bitmap.or_inplace(&rewind_rm_pos);
 	}
 
+	pub fn clear(&mut self) {
+		self.bitmap = Bitmap::create();
+	}
+
 	/// Append a new position to the leaf_set.
 	pub fn add(&mut self, pos: u64) {
 		self.bitmap.add(pos as u32);

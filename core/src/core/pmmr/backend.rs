@@ -38,6 +38,8 @@ pub trait Backend<T: PMMRable> {
 	/// during the rewind.
 	fn rewind(&mut self, position: u64, rewind_rm_pos: &Bitmap) -> Result<(), String>;
 
+	fn truncate(&mut self) -> Result<(), String>;
+
 	/// Get a Hash by insertion position.
 	fn get_hash(&self, position: u64) -> Option<Hash>;
 

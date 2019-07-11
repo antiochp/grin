@@ -218,7 +218,7 @@ where
 
 	/// Truncate the MMR by rewinding back to empty state.
 	pub fn truncate(&mut self) -> Result<(), String> {
-		self.backend.rewind(0, &Bitmap::create())?;
+		self.backend.truncate()?;
 		self.last_pos = 0;
 		Ok(())
 	}

@@ -39,6 +39,9 @@ pub struct BlockContext<'a> {
 	pub pow_verifier: fn(&BlockHeader) -> Result<(), pow::Error>,
 	/// The active txhashset (rewindable MMRs) to use for block processing.
 	pub txhashset: &'a mut txhashset::TxHashSet,
+
+	pub header_pmmr: &'a mut txhashset::PMMRHandle<BlockHeader>,
+
 	/// The active batch to use for block processing.
 	pub batch: store::Batch<'a>,
 	/// The verifier cache (caching verifier for rangeproofs and kernel signatures)
@@ -58,7 +61,7 @@ fn check_known(header: &BlockHeader, ctx: &mut BlockContext<'_>) -> Result<(), E
 /// Returns new head if chain head updated.
 pub fn process_block(b: &Block, ctx: &mut BlockContext<'_>) -> Result<Option<Tip>, Error> {
 	debug!(
-		"pipe: process_block {} at {} [in/out/kern: {}/{}/{}]",
+		"process_block {} at {} [in/out/kern: {}/{}/{}]",
 		b.hash(),
 		b.header.height,
 		b.inputs().len(),
@@ -92,39 +95,44 @@ pub fn process_block(b: &Block, ctx: &mut BlockContext<'_>) -> Result<Option<Tip
 
 	// Start a chain extension unit of work dependent on the success of the
 	// internal validation and saving operations
-	let block_sums = txhashset::extending(&mut ctx.txhashset, &mut ctx.batch, |mut extension| {
-		rewind_and_apply_fork(&prev, &header_head, extension)?;
+	let block_sums = txhashset::extending(
+		&mut ctx.txhashset,
+		&mut ctx.header_pmmr,
+		&mut ctx.batch,
+		|mut extension, header_extension| {
+			rewind_and_apply_fork(&prev, extension, header_extension)?;
 
-		// Check any coinbase being spent have matured sufficiently.
-		// This needs to be done within the context of a potentially
-		// rewound txhashset extension to reflect chain state prior
-		// to applying the new block.
-		verify_coinbase_maturity(b, &mut extension)?;
+			// Check any coinbase being spent have matured sufficiently.
+			// This needs to be done within the context of a potentially
+			// rewound txhashset extension to reflect chain state prior
+			// to applying the new block.
+			verify_coinbase_maturity(b, &extension, &header_extension)?;
 
-		// Validate the block against the UTXO set.
-		validate_utxo(b, &mut extension)?;
+			// Validate the block against the UTXO set.
+			validate_utxo(b, &mut extension)?;
 
-		// Using block_sums (utxo_sum, kernel_sum) for the previous block from the db
-		// we can verify_kernel_sums across the full UTXO sum and full kernel sum
-		// accounting for inputs/outputs/kernels in this new block.
-		// We know there are no double-spends etc. if this verifies successfully.
-		// Remember to save these to the db later on (regardless of extension rollback)
-		let block_sums = verify_block_sums(b, &extension.batch)?;
+			// Using block_sums (utxo_sum, kernel_sum) for the previous block from the db
+			// we can verify_kernel_sums across the full UTXO sum and full kernel sum
+			// accounting for inputs/outputs/kernels in this new block.
+			// We know there are no double-spends etc. if this verifies successfully.
+			// Remember to save these to the db later on (regardless of extension rollback)
+			let block_sums = verify_block_sums(b, &extension.batch)?;
 
-		// Apply the block to the txhashset state.
-		// Validate the txhashset roots and sizes against the block header.
-		// Block is invalid if there are any discrepencies.
-		apply_block_to_txhashset(b, &mut extension)?;
+			// Apply the block to the txhashset state.
+			// Validate the txhashset roots and sizes against the block header.
+			// Block is invalid if there are any discrepencies.
+			apply_block_to_txhashset(b, &mut extension)?;
 
-		// If applying this block does not increase the work on the chain then
-		// we know we have not yet updated the chain to produce a new chain head.
-		let head = extension.batch.head()?;
-		if !has_more_work(&b.header, &head) {
-			extension.force_rollback();
-		}
+			// If applying this block does not increase the work on the chain then
+			// we know we have not yet updated the chain to produce a new chain head.
+			let head = extension.batch.head()?;
+			if !has_more_work(&b.header, &head) {
+				extension.force_rollback();
+			}
 
-		Ok(block_sums)
-	})?;
+			Ok(block_sums)
+		},
+	)?;
 
 	// Add the validated block to the db along with the corresponding block_sums.
 	// We do this even if we have not increased the total cumulative work
@@ -169,7 +177,8 @@ pub fn sync_block_headers(
 		}
 	}
 
-	txhashset::sync_extending(&mut ctx.txhashset, &mut ctx.batch, |extension| {
+	// Note: ctx is configured for sync here and uses the sync_pmmr (not header_pmmr)
+	txhashset::header_extending(&mut ctx.header_pmmr, &mut ctx.batch, |extension| {
 		rewind_and_apply_header_fork(&prev_header, extension)?;
 		for header in headers {
 			extension.validate_root(header)?;
@@ -197,6 +206,12 @@ pub fn sync_block_headers(
 /// Note: In contrast to processing a full block we treat "already known" as success
 /// to allow processing to continue (for header itself).
 pub fn process_block_header(header: &BlockHeader, ctx: &mut BlockContext<'_>) -> Result<(), Error> {
+	debug!(
+		"process_block_header: {} at {}",
+		header.hash(),
+		header.height
+	);
+
 	// Check this header is not an orphan, we must know about the previous header to continue.
 	let prev_header = ctx.batch.get_previous_header(&header)?;
 
@@ -215,7 +230,7 @@ pub fn process_block_header(header: &BlockHeader, ctx: &mut BlockContext<'_>) ->
 		}
 	}
 
-	txhashset::header_extending(&mut ctx.txhashset, &mut ctx.batch, |extension| {
+	txhashset::header_extending(&mut ctx.header_pmmr, &mut ctx.batch, |extension| {
 		rewind_and_apply_header_fork(&prev_header, extension)?;
 		extension.validate_root(header)?;
 		extension.apply_header(header)?;
@@ -390,9 +405,19 @@ fn validate_block(block: &Block, ctx: &mut BlockContext<'_>) -> Result<(), Error
 }
 
 /// Verify the block is not spending coinbase outputs before they have sufficiently matured.
-fn verify_coinbase_maturity(block: &Block, ext: &txhashset::Extension<'_>) -> Result<(), Error> {
+fn verify_coinbase_maturity(
+	block: &Block,
+	ext: &txhashset::Extension<'_>,
+	header_ext: &txhashset::HeaderExtension<'_>,
+) -> Result<(), Error> {
+	let cutoff_height = block
+		.header
+		.height
+		.checked_sub(global::coinbase_maturity())
+		.unwrap_or(0);
+	let cutoff_header = header_ext.get_header_by_height(cutoff_height)?;
 	ext.utxo_view()
-		.verify_coinbase_maturity(&block.inputs(), block.header.height)
+		.verify_coinbase_maturity(&block.inputs(), &cutoff_header)
 }
 
 /// Verify kernel sums across the full utxo and kernel sets based on block_sums
@@ -424,7 +449,8 @@ fn apply_block_to_txhashset(
 	block: &Block,
 	ext: &mut txhashset::Extension<'_>,
 ) -> Result<(), Error> {
-	ext.validate_header_root(&block.header)?;
+	// Note: header root already validated as part of processing the header
+	// ext.validate_header_root(&block.header)?;
 	ext.apply_block(block)?;
 	ext.validate_roots()?;
 	ext.validate_sizes()?;
@@ -528,6 +554,7 @@ pub fn rewind_and_apply_header_fork(
 			.batch
 			.get_block_header(&h)
 			.map_err(|e| ErrorKind::StoreErr(e, format!("getting forked headers")))?;
+		ext.validate_root(&header)?;
 		ext.apply_header(&header)?;
 	}
 
@@ -540,43 +567,31 @@ pub fn rewind_and_apply_header_fork(
 /// the expected state.
 pub fn rewind_and_apply_fork(
 	header: &BlockHeader,
-	header_head: &Tip,
 	ext: &mut txhashset::Extension<'_>,
+	header_ext: &mut txhashset::HeaderExtension<'_>,
 ) -> Result<(), Error> {
-	// TODO - Skip the "rewind and reapply" if everything is aligned and this is the "next" block.
-	// This will be significantly easier once we break out the header extension.
+	debug!(
+		"rewind_and_apply_fork: {} at {}",
+		header.hash(),
+		header.height
+	);
 
-	// Find the fork point where head and header_head diverge.
-	// We may need to rewind back to this fork point if they diverged
-	// prior to the fork point for the provided header.
-	let header_forked_header = {
-		let mut current = ext.batch.get_block_header(&header_head.last_block_h)?;
-		while current.height > 0 && !ext.is_on_current_chain(&current).is_ok() {
-			current = ext.batch.get_previous_header(&current)?;
-		}
-		current
-	};
+	// Put our header extension in the correct state for the provided header.
+	rewind_and_apply_header_fork(header, header_ext)?;
 
 	// Find the fork point where the provided header diverges from our main chain.
 	// Account for the header fork point. Use the earliest fork point to determine
 	// where we need to rewind to. We need to do this
-	let (forked_header, fork_hashes) = {
-		let mut fork_hashes = vec![];
-		let mut current = header.clone();
-		while current.height > 0
-			&& (!ext.is_on_current_chain(&current).is_ok()
-				|| current.height > header_forked_header.height)
-		{
-			fork_hashes.push(current.hash());
-			current = ext.batch.get_previous_header(&current)?;
-		}
-		fork_hashes.reverse();
-
-		(current, fork_hashes)
-	};
+	let mut fork_hashes = vec![];
+	let mut current = header.clone();
+	while current.height > 0 && !header_ext.is_on_current_chain(&current).is_ok() {
+		fork_hashes.push(current.hash());
+		current = ext.batch.get_previous_header(&current)?;
+	}
+	fork_hashes.reverse();
 
 	// Rewind the txhashset state back to the block where we forked from the most work chain.
-	ext.rewind(&forked_header)?;
+	ext.rewind(&current)?;
 
 	// Now re-apply all blocks on this fork.
 	for h in fork_hashes {
@@ -586,7 +601,7 @@ pub fn rewind_and_apply_fork(
 			.map_err(|e| ErrorKind::StoreErr(e, format!("getting forked blocks")))?;
 
 		// Re-verify coinbase maturity along this fork.
-		verify_coinbase_maturity(&fb, ext)?;
+		verify_coinbase_maturity(&fb, ext, header_ext)?;
 		// Validate the block against the UTXO set.
 		validate_utxo(&fb, ext)?;
 		// Re-verify block_sums to set the block_sums up on this fork correctly.
