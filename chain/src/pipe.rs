@@ -19,6 +19,7 @@ use crate::core::core::hash::Hashed;
 use crate::core::core::verifier_cache::VerifierCache;
 use crate::core::core::Committed;
 use crate::core::core::{Block, BlockHeader, BlockSums};
+use crate::core::global;
 use crate::core::pow;
 use crate::error::{Error, ErrorKind};
 use crate::store;
@@ -74,11 +75,10 @@ pub fn process_block(b: &Block, ctx: &mut BlockContext<'_>) -> Result<Option<Tip
 
 	let head = ctx.batch.head()?;
 
-	let is_next = b.header.prev_hash == head.last_block_h;
-
 	// Block is an orphan if we do not know about the previous full block.
 	// Skip this check if we have just processed the previous block
 	// or the full txhashset state (fast sync) at the previous block height.
+	let is_next = b.header.prev_hash == head.last_block_h;
 	let prev = prev_header_store(&b.header, &mut ctx.batch)?;
 	if !is_next && !ctx.batch.block_exists(&prev.hash())? {
 		return Err(ErrorKind::Orphan.into());

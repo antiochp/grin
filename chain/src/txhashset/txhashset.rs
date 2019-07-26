@@ -286,8 +286,8 @@ where
 	trace!("Starting new txhashset (readonly) extension.");
 
 	let pmmr = PMMR::at(&mut header_pmmr.backend, header_pmmr.last_pos);
-	let mut extension = Extension::new(trees, &batch, header);
-	let mut header_extension = HeaderExtension::new(pmmr, &batch);
+	let mut extension = Extension::new(trees, &batch, &head);
+	let mut header_extension = HeaderExtension::new(pmmr, &batch, &head);
 	extension.force_rollback();
 	header_extension.force_rollback();
 	let res = inner(&mut extension, &mut header_extension);
@@ -376,10 +376,9 @@ where
 	{
 		debug!("Starting new txhashset extension.");
 
-		let mut extension = Extension::new(trees, &child_batch, header.clone());
-
 		let pmmr = PMMR::at(&mut header_pmmr.backend, header_pmmr.last_pos);
-		let mut header_extension = HeaderExtension::new(pmmr, &child_batch);
+		let mut extension = Extension::new(trees, &child_batch, &head);
+		let mut header_extension = HeaderExtension::new(pmmr, &child_batch, &head);
 		header_extension.force_rollback();
 		res = inner(&mut extension, &mut header_extension);
 
@@ -440,7 +439,7 @@ where
 	// index saving can be undone
 	let child_batch = batch.child()?;
 	let pmmr = PMMR::at(&mut pmmr_handle.backend, pmmr_handle.last_pos);
-	let mut extension = HeaderExtension::new(pmmr, &child_batch);
+	let mut extension = HeaderExtension::new(pmmr, &child_batch, &head);
 	let res = inner(&mut extension);
 	if res.is_ok() && !extension.is_rollback() {
 		debug!(
@@ -478,10 +477,10 @@ impl<'a> HeaderExtension<'a> {
 	fn new(
 		pmmr: PMMR<'a, BlockHeader, PMMRBackend<BlockHeader>>,
 		batch: &'a Batch<'_>,
-		head: Tip,
+		head: &Tip,
 	) -> HeaderExtension<'a> {
 		HeaderExtension {
-			head,
+			head: head.clone(),
 			pmmr,
 			rollback: false,
 			batch,
@@ -686,9 +685,9 @@ impl<'a> Committed for Extension<'a> {
 }
 
 impl<'a> Extension<'a> {
-	fn new(trees: &'a mut TxHashSet, batch: &'a Batch<'_>, head: Tip) -> Extension<'a> {
+	fn new(trees: &'a mut TxHashSet, batch: &'a Batch<'_>, head: &Tip) -> Extension<'a> {
 		Extension {
-			head,
+			head: head.clone(),
 			output_pmmr: PMMR::at(
 				&mut trees.output_pmmr_h.backend,
 				trees.output_pmmr_h.last_pos,
@@ -951,13 +950,11 @@ impl<'a> Extension<'a> {
 		}
 
 		let head_header = self.batch.get_block_header(&self.head.last_block_h)?;
-		let (header_mmr_size, output_mmr_size, rproof_mmr_size, kernel_mmr_size) = self.sizes();
+		let (output_mmr_size, rproof_mmr_size, kernel_mmr_size) = self.sizes();
 		let expected_header_mmr_size =
 			pmmr::insertion_to_pmmr_index(self.head.height + 2).saturating_sub(1);
 
-		if header_mmr_size != expected_header_mmr_size {
-			Err(ErrorKind::InvalidMMRSize.into())
-		} else if output_mmr_size != head_header.output_mmr_size {
+		if output_mmr_size != head_header.output_mmr_size {
 			Err(ErrorKind::InvalidMMRSize.into())
 		} else if kernel_mmr_size != head_header.kernel_mmr_size {
 			Err(ErrorKind::InvalidMMRSize.into())
@@ -1000,7 +997,6 @@ impl<'a> Extension<'a> {
 		let now = Instant::now();
 
 		let head_header = self.batch.get_block_header(&self.head.last_block_h)?;
-		let genesis = self.get_header_by_height(0)?;
 		let (utxo_sum, kernel_sum) = self.verify_kernel_sums(
 			head_header.total_overage(genesis.kernel_mmr_size > 0),
 			head_header.total_kernel_offset(),
@@ -1345,16 +1341,6 @@ pub fn clean_txhashset_folder(root_dir: &PathBuf) {
 				"clean_txhashset_folder: fail on {:?}. err: {}",
 				txhashset_path, e
 			);
-		}
-	}
-}
-
-/// Clean the header folder
-pub fn clean_header_folder(root_dir: &PathBuf) {
-	let header_path = root_dir.clone().join(HEADERHASHSET_SUBDIR);
-	if header_path.exists() {
-		if let Err(e) = fs::remove_dir_all(header_path.clone()) {
-			warn!("clean_header_folder: fail on {:?}. err: {}", header_path, e);
 		}
 	}
 }
