@@ -204,11 +204,12 @@ impl Store {
 		Ok(())
 	}
 
-	/// Gets a value from the db, provided its key
-	pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Error> {
-		let db = self.db.read();
-		let txn = lmdb::ReadTransaction::new(self.env.clone())?;
-		let access = txn.access();
+	fn get_access(
+		&self,
+		key: &[u8],
+		access: &lmdb::ConstAccessor<'_>,
+		db: RwLockReadGuard<'_, Option<Arc<lmdb::Database<'static>>>>,
+	) -> Result<Option<Vec<u8>>, Error> {
 		let res = access.get(&db.as_ref().unwrap(), key);
 		res.map(|res: &[u8]| res.to_vec())
 			.to_opt()
@@ -246,6 +247,15 @@ impl Store {
 		let db = self.db.read();
 		let txn = lmdb::ReadTransaction::new(self.env.clone())?;
 		let access = txn.access();
+		self.exists_access(key, &access, db)
+	}
+
+	fn exists_access(
+		&self,
+		key: &[u8],
+		access: &lmdb::ConstAccessor<'_>,
+		db: RwLockReadGuard<'_, Option<Arc<lmdb::Database<'static>>>>,
+	) -> Result<bool, Error> {
 		let res: lmdb::error::Result<&lmdb::Ignore> = access.get(&db.as_ref().unwrap(), key);
 		res.to_opt().map(|r| r.is_some()).map_err(From::from)
 	}
@@ -306,18 +316,25 @@ impl<'a> Batch<'a> {
 		}
 	}
 
-	/// gets a value from the db, provided its key
-	pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Error> {
-		self.store.get(key)
+	/// gets a value from the db, provided its key.
+	/// Takes current uncommitted batch into account (transactional semantics).
+	pub fn get(&'a self, key: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+		let access = self.tx.access();
+		let db = self.store.db.read();
+		self.store.get_access(key, &access, db)
 	}
 
-	/// Whether the provided key exists
+	/// Whether the provided key exists.
+	/// Takes current uncommitted batch into account (transactional semantics).
 	pub fn exists(&self, key: &[u8]) -> Result<bool, Error> {
-		self.store.exists(key)
+		let access = self.tx.access();
+		let db = self.store.db.read();
+		self.store.exists_access(key, &access, db)
 	}
 
 	/// Produces an iterator of `Readable` types moving forward from the
 	/// provided key.
+	/// Note: Questionable transactional semantics here.
 	pub fn iter<T: ser::Readable>(&self, from: &[u8]) -> Result<SerIterator<T>, Error> {
 		self.store.iter(from)
 	}

@@ -20,10 +20,13 @@ use crate::core::core::{Block, BlockHeader, BlockSums};
 use crate::core::pow::Difficulty;
 use crate::types::Tip;
 use crate::util::secp::pedersen::Commitment;
+use crate::util::RwLock;
 use croaring::Bitmap;
 use grin_store as store;
 use grin_store::{option_to_not_found, to_key, Error, SerIterator};
 use std::sync::Arc;
+
+use lru_cache::LruCache;
 
 const STORE_SUBPATH: &'static str = "chain";
 
@@ -40,13 +43,15 @@ const BLOCK_SUMS_PREFIX: u8 = 'M' as u8;
 /// All chain-related database operations
 pub struct ChainStore {
 	db: store::Store,
+	header_cache: Arc<RwLock<LruCache<Hash, BlockHeader>>>,
 }
 
 impl ChainStore {
 	/// Create new chain store
 	pub fn new(db_root: &str) -> Result<ChainStore, Error> {
 		let db = store::Store::new(db_root, None, Some(STORE_SUBPATH.clone()), None)?;
-		Ok(ChainStore { db })
+		let header_cache = Arc::new(RwLock::new(LruCache::new(1440)));
+		Ok(ChainStore { db, header_cache })
 	}
 }
 
@@ -103,12 +108,35 @@ impl ChainStore {
 	}
 
 	/// Get block header.
+	/// TODO - Document what we are doing here.
 	pub fn get_block_header(&self, h: &Hash) -> Result<BlockHeader, Error> {
-		option_to_not_found(
-			self.db
-				.get_ser(&to_key(BLOCK_HEADER_PREFIX, &mut h.to_vec())),
-			&format!("BLOCK HEADER: {}", h),
-		)
+		match self
+			.db
+			.exists(&to_key(BLOCK_HEADER_PREFIX, &mut h.to_vec()))
+		{
+			Ok(true) => {
+				let mut cache = self.header_cache.write();
+				match cache.get_mut(h) {
+					Some(header) => Ok(header.clone()),
+					None => {
+						let res: Result<BlockHeader, Error> = option_to_not_found(
+							self.db
+								.get_ser(&to_key(BLOCK_HEADER_PREFIX, &mut h.to_vec())),
+							&format!("BLOCK HEADER: {}", h),
+						);
+						match res {
+							Ok(header) => {
+								cache.insert(*h, header.clone());
+								Ok(header)
+							}
+							Err(e) => Err(e),
+						}
+					}
+				}
+			}
+			Ok(false) => Err(Error::NotFoundErr(format!("BLOCK HEADER: {}", h))),
+			Err(e) => Err(e),
+		}
 	}
 
 	/// Get PMMR pos for the given output commitment.
@@ -124,6 +152,7 @@ impl ChainStore {
 	pub fn batch(&self) -> Result<Batch<'_>, Error> {
 		Ok(Batch {
 			db: self.db.batch()?,
+			header_cache: self.header_cache.clone(),
 		})
 	}
 }
@@ -132,6 +161,7 @@ impl ChainStore {
 /// discarded on error.
 pub struct Batch<'a> {
 	db: store::Batch<'a>,
+	header_cache: Arc<RwLock<LruCache<Hash, BlockHeader>>>,
 }
 
 impl<'a> Batch<'a> {
@@ -277,12 +307,44 @@ impl<'a> Batch<'a> {
 	}
 
 	/// Get block header.
+	/// first check it exists via the db
+	/// if it does then go look in the cache (avoid expensive deserialization)
+	/// fallback to reading (and deserializing) from the db
+	// pub fn get_block_header(&self, h: &Hash) -> Result<BlockHeader, Error> {
+	// 	option_to_not_found(
+	// 		self.db
+	// 			.get_ser(&to_key(BLOCK_HEADER_PREFIX, &mut h.to_vec())),
+	// 		&format!("BLOCK HEADER: {}", h),
+	// 	)
+	// }
 	pub fn get_block_header(&self, h: &Hash) -> Result<BlockHeader, Error> {
-		option_to_not_found(
-			self.db
-				.get_ser(&to_key(BLOCK_HEADER_PREFIX, &mut h.to_vec())),
-			&format!("BLOCK HEADER: {}", h),
-		)
+		match self
+			.db
+			.exists(&to_key(BLOCK_HEADER_PREFIX, &mut h.to_vec()))
+		{
+			Ok(true) => {
+				let mut cache = self.header_cache.write();
+				match cache.get_mut(h) {
+					Some(header) => Ok(header.clone()),
+					None => {
+						let res: Result<BlockHeader, Error> = option_to_not_found(
+							self.db
+								.get_ser(&to_key(BLOCK_HEADER_PREFIX, &mut h.to_vec())),
+							&format!("BLOCK HEADER: {}", h),
+						);
+						match res {
+							Ok(header) => {
+								cache.insert(*h, header.clone());
+								Ok(header)
+							}
+							Err(e) => Err(e),
+						}
+					}
+				}
+			}
+			Ok(false) => Err(Error::NotFoundErr(format!("BLOCK HEADER: {}", h))),
+			Err(e) => Err(e),
+		}
 	}
 
 	/// Save the input bitmap for the block.
@@ -370,6 +432,7 @@ impl<'a> Batch<'a> {
 	pub fn child(&mut self) -> Result<Batch<'_>, Error> {
 		Ok(Batch {
 			db: self.db.child()?,
+			header_cache: self.header_cache.clone(),
 		})
 	}
 
