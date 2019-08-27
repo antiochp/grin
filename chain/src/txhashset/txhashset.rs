@@ -607,59 +607,9 @@ impl<'a> HeaderExtension<'a> {
 		Ok(())
 	}
 
-	/// Truncate the header MMR (rewind all the way back to pos 0).
-	/// Used when rebuilding the header MMR by reapplying all headers
-	/// including the genesis block header.
-	pub fn truncate(&mut self) -> Result<(), Error> {
-		debug!("Truncating header extension.");
-		self.pmmr.truncate().map_err(&ErrorKind::TxHashSetErr)?;
-		Ok(())
-	}
-
 	/// The size of the header MMR.
 	pub fn size(&self) -> u64 {
 		self.pmmr.unpruned_size()
-	}
-
-	/// TODO - think about how to optimize this.
-	/// Requires *all* header hashes to be iterated over in ascending order.
-	pub fn rebuild(&mut self, head: &Tip, genesis: &BlockHeader) -> Result<(), Error> {
-		debug!(
-			"About to rebuild header extension from {:?} to {:?}.",
-			genesis.hash(),
-			head.last_block_h,
-		);
-
-		let mut header_hashes = vec![];
-		let mut current = self.batch.get_block_header(&head.last_block_h)?;
-		while current.height > 0 {
-			header_hashes.push(current.hash());
-			current = self.batch.get_previous_header(&current)?;
-		}
-
-		header_hashes.reverse();
-
-		// Trucate the extension (back to pos 0).
-		self.truncate()?;
-
-		// Re-apply the genesis header after truncation.
-		self.apply_header(&genesis)?;
-
-		if header_hashes.len() > 0 {
-			debug!(
-				"Re-applying {} headers to extension, from {:?} to {:?}.",
-				header_hashes.len(),
-				header_hashes.first().unwrap(),
-				header_hashes.last().unwrap(),
-			);
-
-			for h in header_hashes {
-				let header = self.batch.get_block_header(&h)?;
-				self.validate_root(&header)?;
-				self.apply_header(&header)?;
-			}
-		}
-		Ok(())
 	}
 
 	/// The root of the header MMR for convenience.
