@@ -45,12 +45,17 @@ const KERNEL_SUBDIR: &'static str = "kernel";
 
 const TXHASHSET_ZIP: &'static str = "txhashset_snapshot";
 
+/// Convenience wrapper around a single prunable MMR backend.
 pub struct PMMRHandle<T: PMMRable> {
+	/// The backend storage for the MMR.
 	pub backend: PMMRBackend<T>,
+	/// The last position accessible via this MMR handle (backend may continue out beyond this).
 	pub last_pos: u64,
 }
 
 impl<T: PMMRable> PMMRHandle<T> {
+	/// Constructor to create a PMMR handle from an existing directory structure on disk.
+	/// Creates the backend files as necessary if they do not already exist.
 	pub fn new(
 		root_dir: &str,
 		sub_dir: &str,
@@ -71,7 +76,7 @@ impl<T: PMMRable> PMMRHandle<T> {
 }
 
 impl PMMRHandle<BlockHeader> {
-	// /// Get the header hash at the specified height based on the current state of this header pmmr.
+	/// Get the header hash at the specified height based on the current header MMR state.
 	pub fn get_header_hash_by_height(&self, height: u64) -> Result<Hash, Error> {
 		let pos = pmmr::insertion_to_pmmr_index(height + 1);
 		let header_pmmr = ReadonlyPMMR::at(&self.backend, self.last_pos);
@@ -192,9 +197,9 @@ impl TxHashSet {
 			.get_last_n_insertions(distance)
 	}
 
+	/// Convenience function to query the db for a header by its hash.
 	pub fn get_block_header(&self, hash: &Hash) -> Result<BlockHeader, Error> {
-		let header = self.commit_index.get_block_header(&hash)?;
-		Ok(header)
+		Ok(self.commit_index.get_block_header(&hash)?)
 	}
 
 	/// Get all outputs MMR pos
@@ -552,8 +557,7 @@ impl<'a> HeaderExtension<'a> {
 	pub fn get_header_by_height(&self, height: u64) -> Result<BlockHeader, Error> {
 		let pos = pmmr::insertion_to_pmmr_index(height + 1);
 		if let Some(hash) = self.get_header_hash(pos) {
-			let header = self.batch.get_block_header(&hash)?;
-			Ok(header)
+			Ok(self.batch.get_block_header(&hash)?)
 		} else {
 			Err(ErrorKind::Other(format!("get header by height")).into())
 		}
@@ -632,12 +636,17 @@ impl<'a> HeaderExtension<'a> {
 	}
 }
 
+/// An extension "pair" consisting of a txhashet extension (outputs, rangeproofs, kernels)
+/// and the associated header extension.
 pub struct ExtensionPair<'a> {
+	/// The header extension.
 	pub header_extension: &'a mut HeaderExtension<'a>,
+	/// The txhashset extension.
 	pub extension: &'a mut Extension<'a>,
 }
 
 impl<'a> ExtensionPair<'a> {
+	/// Accessor for the batch associated with this extension pair.
 	pub fn batch(&mut self) -> &'a Batch<'a> {
 		self.extension.batch
 	}
@@ -726,11 +735,7 @@ impl<'a> Extension<'a> {
 		)
 	}
 
-	/// Apply a new block to the existing state -
-	///   * outputs
-	///   * inputs
-	///   * kernels
-	///
+	/// Apply a new block to the current txhashet extension (output, rangeproof, kernel MMRs).
 	pub fn apply_block(&mut self, b: &Block) -> Result<(), Error> {
 		for out in b.outputs() {
 			let pos = self.apply_output(out)?;
@@ -821,7 +826,6 @@ impl<'a> Extension<'a> {
 				);
 			}
 		}
-
 		Ok(output_pos)
 	}
 
@@ -931,28 +935,18 @@ impl<'a> Extension<'a> {
 		})
 	}
 
-	/// Validate the following MMR roots against the latest header applied -
-	///   * output
-	///   * rangeproof
-	///   * kernel
-	///
-	/// Note we do not validate the header MMR root here as we need to validate
-	/// a header against the state of the MMR *prior* to applying it.
-	/// Each header commits to the root of the MMR of all previous headers,
-	/// not including the header itself.
-	///
+	/// Validate the MMR (output, rangeproof, kernel) roots against the latest header.
 	pub fn validate_roots(&self) -> Result<(), Error> {
-		// If we are validating the genesis block then we have no outputs or
-		// kernels. So we are done here.
 		if self.head.height == 0 {
 			return Ok(());
 		}
-		let head_header = self.batch.get_block_header(&self.head.last_block_h)?;
-		let roots = self.roots()?;
-		if roots.output_root != head_header.output_root
-			|| roots.rproof_root != head_header.range_proof_root
-			|| roots.kernel_root != head_header.kernel_root
-		{
+		let head_header = self.batch.get_block_header(&self.head.hash())?;
+		let header_roots = TxHashSetRoots {
+			output_root: head_header.output_root,
+			rproof_root: head_header.range_proof_root,
+			kernel_root: head_header.kernel_root,
+		};
+		if header_roots != self.roots()? {
 			Err(ErrorKind::InvalidRoot.into())
 		} else {
 			Ok(())
@@ -961,20 +955,16 @@ impl<'a> Extension<'a> {
 
 	/// Validate the header, output and kernel MMR sizes against the block header.
 	pub fn validate_sizes(&self) -> Result<(), Error> {
-		// If we are validating the genesis block then we have no outputs or
-		// kernels. So we are done here.
 		if self.head.height == 0 {
 			return Ok(());
 		}
-
 		let head_header = self.batch.get_block_header(&self.head.last_block_h)?;
-		let (output_mmr_size, rproof_mmr_size, kernel_mmr_size) = self.sizes();
-
-		if output_mmr_size != head_header.output_mmr_size {
-			Err(ErrorKind::InvalidMMRSize.into())
-		} else if kernel_mmr_size != head_header.kernel_mmr_size {
-			Err(ErrorKind::InvalidMMRSize.into())
-		} else if output_mmr_size != rproof_mmr_size {
+		if (
+			head_header.output_mmr_size,
+			head_header.output_mmr_size,
+			head_header.kernel_mmr_size,
+		) != self.sizes()
+		{
 			Err(ErrorKind::InvalidMMRSize.into())
 		} else {
 			Ok(())

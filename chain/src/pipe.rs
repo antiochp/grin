@@ -39,6 +39,7 @@ pub struct BlockContext<'a> {
 	pub pow_verifier: fn(&BlockHeader) -> Result<(), pow::Error>,
 	/// The active txhashset (rewindable MMRs) to use for block processing.
 	pub txhashset: &'a mut txhashset::TxHashSet,
+	/// The active header MMR handle.
 	pub header_pmmr: &'a mut txhashset::PMMRHandle<BlockHeader>,
 	/// The active batch to use for block processing.
 	pub batch: store::Batch<'a>,
@@ -179,8 +180,6 @@ pub fn sync_block_headers(
 	if headers.is_empty() {
 		return Ok(());
 	}
-
-	let first_header = headers.first().expect("first header");
 	let last_header = headers.last().expect("last header");
 
 	// Check if we know about all these headers. If so we can accept them quickly.

@@ -197,6 +197,7 @@ impl Chain {
 		})
 	}
 
+	/// Return our shared header MMR handle.
 	pub fn header_pmmr(&self) -> Arc<RwLock<PMMRHandle<BlockHeader>>> {
 		self.header_pmmr.clone()
 	}
