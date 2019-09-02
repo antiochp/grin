@@ -171,12 +171,10 @@ impl Chain {
 		archive_mode: bool,
 	) -> Result<Chain, Error> {
 		let store = Arc::new(store::ChainStore::new(&db_root)?);
-		let mut txhashset = txhashset::TxHashSet::open(db_root.clone(), store.clone(), None)?;
-		let mut header_pmmr =
-			PMMRHandle::new(&db_root, "header", "header_head", false, true, None)?;
+		let txhashset = txhashset::TxHashSet::open(db_root.clone(), store.clone(), None)?;
+		let header_pmmr = PMMRHandle::new(&db_root, "header", "header_head", false, true, None)?;
 		let sync_pmmr = PMMRHandle::new(&db_root, "header", "sync_head", false, true, None)?;
 
-		setup_head(&genesis, &store, &mut header_pmmr, &mut txhashset)?;
 		let chain = Chain {
 			db_root,
 			store,
@@ -190,6 +188,7 @@ impl Chain {
 			archive_mode,
 			genesis: genesis.header.clone(),
 		};
+		chain.setup_head(&genesis)?;
 		chain.log_heads()?;
 		Ok(chain)
 	}
@@ -210,18 +209,22 @@ impl Chain {
 	}
 
 	fn log_heads(&self) -> Result<(), Error> {
-		let log_head = |name, head: Tip| {
-			debug!(
-				"{}: {} @ {} [{}]",
-				name,
-				head.total_difficulty.to_num(),
-				head.height,
-				head.hash(),
-			);
+		let log_head = |name, head: Result<Tip, Error>| {
+			if let Ok(head) = head {
+				debug!(
+					"{}: {} @ {} [{}]",
+					name,
+					head.total_difficulty.to_num(),
+					head.height,
+					head.hash(),
+				);
+			} else {
+				debug!("{}: head missing", name);
+			}
 		};
-		log_head("head", self.head()?);
-		log_head("header_head", self.header_head()?);
-		log_head("sync_head", self.get_sync_head()?);
+		log_head("head", self.head());
+		log_head("header_head", self.header_head());
+		log_head("sync_head", self.get_sync_head());
 		Ok(())
 	}
 
@@ -355,25 +358,11 @@ impl Chain {
 	/// We update header_head here if our total work increases.
 	pub fn sync_block_headers(&self, headers: &[BlockHeader], opts: Options) -> Result<(), Error> {
 		let mut sync_pmmr = self.sync_pmmr.write();
-		let mut header_pmmr = self.header_pmmr.write();
 		let mut txhashset = self.txhashset.write();
-
-		// Sync the chunk of block headers, updating sync_head as necessary.
-		{
-			let batch = self.store.batch()?;
-			let mut ctx = self.new_ctx(opts, batch, &mut sync_pmmr, &mut txhashset)?;
-			pipe::sync_block_headers(headers, &mut ctx)?;
-			ctx.batch.commit()?;
-		}
-
-		// Now "process" the last block header, updating header_head to match sync_head.
-		if let Some(header) = headers.last() {
-			let batch = self.store.batch()?;
-			let mut ctx = self.new_ctx(opts, batch, &mut header_pmmr, &mut txhashset)?;
-			pipe::process_block_header(header, &mut ctx)?;
-			ctx.batch.commit()?;
-		}
-
+		let batch = self.store.batch()?;
+		let mut ctx = self.new_ctx(opts, batch, &mut sync_pmmr, &mut txhashset)?;
+		pipe::sync_block_headers(headers, &mut ctx)?;
+		ctx.batch.commit()?;
 		Ok(())
 	}
 
@@ -735,18 +724,6 @@ impl Chain {
 		let horizon = global::cut_through_horizon() as u64;
 		let body_head = self.head()?;
 		let header_head = self.header_head()?;
-		let sync_head = self.get_sync_head()?;
-
-		debug!(
-			"{}: body_head - {}, {}, header_head - {}, {}, sync_head - {}, {}",
-			caller,
-			body_head.last_block_h,
-			body_head.height,
-			header_head.last_block_h,
-			header_head.height,
-			sync_head.last_block_h,
-			sync_head.height,
-		);
 
 		if body_head.total_difficulty >= header_head.total_difficulty {
 			debug!(
@@ -1137,60 +1114,45 @@ impl Chain {
 
 	/// Tip (head) of the block chain.
 	pub fn head(&self) -> Result<Tip, Error> {
-		self.store
-			.head()
-			.map_err(|e| ErrorKind::StoreErr(e, "chain head".to_owned()).into())
+		Ok(self.store.head()?)
 	}
 
 	/// Tail of the block chain in this node after compact (cross-block cut-through)
 	pub fn tail(&self) -> Result<Tip, Error> {
-		self.store
-			.tail()
-			.map_err(|e| ErrorKind::StoreErr(e, "chain tail".to_owned()).into())
+		Ok(self.store.tail()?)
 	}
 
 	/// Tip (head) of the header chain.
 	pub fn header_head(&self) -> Result<Tip, Error> {
 		let handle = self.header_pmmr.read();
-		let hash = handle.head_hash()?;
-		let header = self.store.get_block_header(&hash)?;
-		// .map_err(|e| ErrorKind::StoreErr(e, "chain header head".to_owned()).into())?;
-		Ok(Tip::from_header(&header))
+		Ok(Tip::from_header(
+			&self.store.get_block_header(&handle.head_hash()?)?,
+		))
 	}
 
 	/// Block header for the chain head
 	pub fn head_header(&self) -> Result<BlockHeader, Error> {
-		self.store
-			.head_header()
-			.map_err(|e| ErrorKind::StoreErr(e, "chain head header".to_owned()).into())
+		Ok(self.store.head_header()?)
 	}
 
 	/// Gets a block header by hash
 	pub fn get_block(&self, h: &Hash) -> Result<Block, Error> {
-		self.store
-			.get_block(h)
-			.map_err(|e| ErrorKind::StoreErr(e, "chain get block".to_owned()).into())
+		Ok(self.store.get_block(h)?)
 	}
 
 	/// Gets a block header by hash
 	pub fn get_block_header(&self, h: &Hash) -> Result<BlockHeader, Error> {
-		self.store
-			.get_block_header(h)
-			.map_err(|e| ErrorKind::StoreErr(e, "chain get header".to_owned()).into())
+		Ok(self.store.get_block_header(h)?)
 	}
 
 	/// Get previous block header.
 	pub fn get_previous_header(&self, header: &BlockHeader) -> Result<BlockHeader, Error> {
-		self.store
-			.get_previous_header(header)
-			.map_err(|e| ErrorKind::StoreErr(e, "chain get previous header".to_owned()).into())
+		Ok(self.store.get_previous_header(header)?)
 	}
 
 	/// Get block_sums by header hash.
 	pub fn get_block_sums(&self, h: &Hash) -> Result<BlockSums, Error> {
-		self.store
-			.get_block_sums(h)
-			.map_err(|e| ErrorKind::StoreErr(e, "chain get block_sums".to_owned()).into())
+		Ok(self.store.get_block_sums(h)?)
 	}
 
 	/// Gets the block header at the provided height.
@@ -1287,10 +1249,9 @@ impl Chain {
 	/// This may be significantly different to current header chain.
 	pub fn get_sync_head(&self) -> Result<Tip, Error> {
 		let handle = self.sync_pmmr.read();
-		let hash = handle.head_hash()?;
-		let header = self.store.get_block_header(&hash)?;
-		// .map_err(|e| ErrorKind::StoreErr(e, "chain get sync head".to_owned()).into())?;
-		Ok(Tip::from_header(&header))
+		Ok(Tip::from_header(
+			&self.store.get_block_header(&handle.head_hash()?)?,
+		))
 	}
 
 	/// Builds an iterator on blocks starting from the current chain head and
@@ -1304,101 +1265,101 @@ impl Chain {
 
 	/// Check whether we have a block without reading it
 	pub fn block_exists(&self, h: Hash) -> Result<bool, Error> {
-		self.store
-			.block_exists(&h)
-			.map_err(|e| ErrorKind::StoreErr(e, "chain block exists".to_owned()).into())
+		Ok(self.store.block_exists(&h)?)
 	}
-}
 
-fn setup_head(
-	genesis: &Block,
-	store: &store::ChainStore,
-	header_pmmr: &mut txhashset::PMMRHandle<BlockHeader>,
-	txhashset: &mut txhashset::TxHashSet,
-) -> Result<(), Error> {
-	let mut batch = store.batch()?;
+	fn setup_head(&self, genesis: &Block) -> Result<(), Error> {
+		let mut header_pmmr = self.header_pmmr.write();
+		let mut sync_pmmr = self.sync_pmmr.write();
+		let mut txhashset = self.txhashset.write();
+		let mut batch = self.store.batch()?;
 
-	// check if we have a head in store, otherwise the genesis block is it
-	let head_res = batch.head();
-	let mut head: Tip;
-	match head_res {
-		Ok(h) => {
-			head = h;
-			loop {
-				// Use current chain tip if we have one.
-				// Note: We are rewinding and validating against a writeable extension.
-				// If validation is successful we will truncate the backend files
-				// to match the provided block header.
-				let header = batch.get_block_header(&head.last_block_h)?;
+		// check if we have a head in store, otherwise the genesis block is it
+		let head_res = batch.head();
+		let mut head: Tip;
+		match head_res {
+			Ok(h) => {
+				head = h;
+				loop {
+					// Use current chain tip if we have one.
+					// Note: We are rewinding and validating against a writeable extension.
+					// If validation is successful we will truncate the backend files
+					// to match the provided block header.
+					let header = batch.get_block_header(&head.last_block_h)?;
 
-				let res = txhashset::extending(header_pmmr, txhashset, &mut batch, |ext| {
-					pipe::rewind_and_apply_fork(&header, ext)?;
-					let ref mut extension = ext.extension;
-					extension.validate_roots()?;
+					let res =
+						txhashset::extending(&mut header_pmmr, &mut txhashset, &mut batch, |ext| {
+							pipe::rewind_and_apply_fork(&header, ext)?;
+							let ref mut extension = ext.extension;
+							extension.validate_roots()?;
 
-					debug!(
-						"init: rewinding and validating before we start... {} at {}",
-						header.hash(),
-						header.height,
-					);
-					Ok(())
-				});
+							debug!(
+								"init: rewinding and validating before we start... {} at {}",
+								header.hash(),
+								header.height,
+							);
+							Ok(())
+						});
 
-				if res.is_ok() {
-					break;
-				} else {
-					// We may have corrupted the MMR backend files last time we stopped the
-					// node. If this appears to be the case revert the head to the previous
-					// header and try again
-					let prev_header = batch.get_block_header(&head.prev_block_h)?;
-					let _ = batch.delete_block(&header.hash());
-					head = Tip::from_header(&prev_header);
-					batch.save_body_head(&head)?;
+					if res.is_ok() {
+						break;
+					} else {
+						// We may have corrupted the MMR backend files last time we stopped the
+						// node. If this appears to be the case revert the head to the previous
+						// header and try again
+						let prev_header = batch.get_block_header(&head.prev_block_h)?;
+						let _ = batch.delete_block(&header.hash());
+						head = Tip::from_header(&prev_header);
+						batch.save_body_head(&head)?;
+					}
 				}
 			}
-		}
-		Err(NotFoundErr(_)) => {
-			let mut sums = BlockSums::default();
+			Err(NotFoundErr(_)) => {
+				let mut sums = BlockSums::default();
 
-			// Save the genesis header with a "zero" header_root.
-			// We will update this later once we have the correct header_root.
-			batch.save_block_header(&genesis.header)?;
-			batch.save_block(&genesis)?;
+				// Save the genesis header with a "zero" header_root.
+				// We will update this later once we have the correct header_root.
+				batch.save_block_header(&genesis.header)?;
+				batch.save_block(&genesis)?;
 
-			let tip = Tip::from_header(&genesis.header);
-			batch.save_body_head(&tip)?;
+				let tip = Tip::from_header(&genesis.header);
+				batch.save_body_head(&tip)?;
 
-			if genesis.kernels().len() > 0 {
-				let (utxo_sum, kernel_sum) = (sums, genesis as &dyn Committed).verify_kernel_sums(
-					genesis.header.overage(),
-					genesis.header.total_kernel_offset(),
-				)?;
-				sums = BlockSums {
-					utxo_sum,
-					kernel_sum,
-				};
+				if genesis.kernels().len() > 0 {
+					let (utxo_sum, kernel_sum) = (sums, genesis as &dyn Committed)
+						.verify_kernel_sums(
+							genesis.header.overage(),
+							genesis.header.total_kernel_offset(),
+						)?;
+					sums = BlockSums {
+						utxo_sum,
+						kernel_sum,
+					};
+				}
+				txhashset::header_extending(&mut header_pmmr, &mut batch, |extension| {
+					extension.apply_header(&genesis.header)?;
+					Ok(())
+				})?;
+				txhashset::header_extending(&mut sync_pmmr, &mut batch, |extension| {
+					extension.apply_header(&genesis.header)?;
+					Ok(())
+				})?;
+				txhashset::extending(&mut header_pmmr, &mut txhashset, &mut batch, |ext| {
+					let ref mut extension = ext.extension;
+					extension.apply_block(&genesis)?;
+					extension.validate_roots()?;
+					extension.validate_sizes()?;
+					Ok(())
+				})?;
+				// Save the block_sums to the db for use later.
+				batch.save_block_sums(&genesis.hash(), &sums)?;
+				info!("init: saved genesis: {:?}", genesis.hash());
 			}
-			txhashset::header_extending(header_pmmr, &mut batch, |extension| {
-				extension.apply_header(&genesis.header)?;
-				Ok(())
-			})?;
-			txhashset::extending(header_pmmr, txhashset, &mut batch, |ext| {
-				let ref mut extension = ext.extension;
-				extension.apply_block(&genesis)?;
-				extension.validate_roots()?;
-				extension.validate_sizes()?;
-				Ok(())
-			})?;
+			Err(e) => return Err(ErrorKind::StoreErr(e, "chain init load head".to_owned()))?,
+		};
 
-			// Save the block_sums to the db for use later.
-			batch.save_block_sums(&genesis.hash(), &sums)?;
+		batch.commit()?;
 
-			info!("init: saved genesis: {:?}", genesis.hash());
-		}
-		Err(e) => return Err(ErrorKind::StoreErr(e, "chain init load head".to_owned()))?,
-	};
-
-	batch.commit()?;
-
-	Ok(())
+		Ok(())
+	}
 }

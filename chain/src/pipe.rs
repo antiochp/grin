@@ -202,6 +202,11 @@ pub fn sync_block_headers(
 	// Now apply this entire chunk of headers to the sync MMR.
 	txhashset::header_extending(&mut ctx.header_pmmr, &mut ctx.batch, |ext| {
 		rewind_and_apply_header_fork(&last_header, ext)?;
+		debug!(
+			"sync head updated to {} at {}",
+			last_header.hash(),
+			last_header.height
+		);
 		Ok(())
 	})
 }
@@ -237,7 +242,13 @@ pub fn process_block_header(header: &BlockHeader, ctx: &mut BlockContext<'_>) ->
 		rewind_and_apply_header_fork(&prev_header, ext)?;
 		ext.validate_root(header)?;
 		ext.apply_header(header)?;
-		if !has_more_work(&header, &header_head) {
+		if has_more_work(&header, &header_head) {
+			debug!(
+				"header head updated to {} at {}",
+				header.hash(),
+				header.height
+			);
+		} else {
 			ext.force_rollback();
 		}
 		Ok(())

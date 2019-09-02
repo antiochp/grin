@@ -90,6 +90,9 @@ impl PMMRHandle<BlockHeader> {
 	/// Get the header hash for the head of the header chain based on current MMR state.
 	/// Find the last leaf pos based on MMR size and return its header hash.
 	pub fn head_hash(&self) -> Result<Hash, Error> {
+		if self.last_pos == 0 {
+			return Err(ErrorKind::Other(format!("MMR empty, no head")).into());
+		}
 		let header_pmmr = ReadonlyPMMR::at(&self.backend, self.last_pos);
 		let leaf_pos = pmmr::bintree_rightmost(self.last_pos);
 		if let Some(entry) = header_pmmr.get_data(leaf_pos) {
@@ -533,9 +536,14 @@ impl<'a> HeaderExtension<'a> {
 		handle: &'a mut PMMRHandle<BlockHeader>,
 		batch: &'a Batch<'_>,
 	) -> Result<HeaderExtension<'a>, Error> {
-		let head_hash = handle.head_hash()?;
-		let header = batch.get_block_header(&head_hash)?;
-		let head = Tip::from_header(&header);
+		let head = match handle.head_hash() {
+			Ok(hash) => {
+				let header = batch.get_block_header(&hash)?;
+				Tip::from_header(&header)
+			}
+			Err(_) => Tip::default(),
+		};
+
 		let pmmr = PMMR::at(&mut handle.backend, handle.last_pos);
 		Ok(HeaderExtension {
 			head,
@@ -598,6 +606,10 @@ impl<'a> HeaderExtension<'a> {
 	/// Rewind the header extension to the specified header.
 	/// Note the close relationship between header height and insertion index.
 	pub fn rewind(&mut self, header: &BlockHeader) -> Result<(), Error> {
+		if header.hash() == self.head.hash() {
+			return Ok(());
+		}
+
 		debug!(
 			"Rewind header extension to {} at {} from {} at {}",
 			header.hash(),

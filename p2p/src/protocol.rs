@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::conn::{Message, MessageHandler, Response, Tracker};
-use crate::core::core::{self, hash::Hash, hash::Hashed, CompactBlock};
+use crate::core::core::{self, hash::Hash, hash::Hashed, BlockHeader, CompactBlock};
 
 use crate::msg::{
 	BanReason, GetPeerAddrs, Headers, KernelDataResponse, Locator, PeerAddrs, Ping, Pong,
@@ -231,9 +231,11 @@ impl MessageHandler for Protocol {
 			Type::Headers => {
 				let mut total_bytes_read = 0;
 
-				// Read the count (u16) so we now how many headers to read.
+				// Read the count (u16) so we know how many headers we will read.
 				let (count, bytes_read): (u16, _) = msg.streaming_read()?;
 				total_bytes_read += bytes_read;
+
+				let mut last_header: Option<BlockHeader> = None;
 
 				// Read chunks of headers off the stream and pass them off to the adapter.
 				let chunk_size = 32;
@@ -245,6 +247,11 @@ impl MessageHandler for Protocol {
 						total_bytes_read += bytes_read;
 					}
 					adapter.headers_received(&headers, &self.peer_info)?;
+					last_header = headers.last().cloned();
+				}
+
+				if let Some(header) = last_header {
+					adapter.header_received(header, &self.peer_info)?;
 				}
 
 				// Now check we read the correct total number of bytes off the stream.
