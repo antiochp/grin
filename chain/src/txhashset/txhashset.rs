@@ -86,6 +86,18 @@ impl PMMRHandle<BlockHeader> {
 			Err(ErrorKind::Other(format!("get header hash by height")).into())
 		}
 	}
+
+	/// Get the header hash for the head of the header chain based on current MMR state.
+	/// Find the last leaf pos based on MMR size and return its header hash.
+	pub fn head_hash(&self) -> Result<Hash, Error> {
+		let header_pmmr = ReadonlyPMMR::at(&self.backend, self.last_pos);
+		let leaf_pos = pmmr::bintree_rightmost(self.last_pos);
+		if let Some(entry) = header_pmmr.get_data(leaf_pos) {
+			Ok(entry.hash())
+		} else {
+			Err(ErrorKind::Other(format!("failed to find head hash")).into())
+		}
+	}
 }
 
 /// An easy to manipulate structure holding the 3 sum trees necessary to
@@ -235,8 +247,6 @@ impl TxHashSet {
 
 	/// Get MMR roots.
 	pub fn roots(&self) -> TxHashSetRoots {
-		// let header_pmmr =
-		// 	ReadonlyPMMR::at(&self.header_pmmr_h.backend, self.header_pmmr_h.last_pos);
 		let output_pmmr =
 			ReadonlyPMMR::at(&self.output_pmmr_h.backend, self.output_pmmr_h.last_pos);
 		let rproof_pmmr =
@@ -245,7 +255,6 @@ impl TxHashSet {
 			ReadonlyPMMR::at(&self.kernel_pmmr_h.backend, self.kernel_pmmr_h.last_pos);
 
 		TxHashSetRoots {
-			// header_root: header_pmmr.root(),
 			output_root: output_pmmr.root(),
 			rproof_root: rproof_pmmr.root(),
 			kernel_root: kernel_pmmr.root(),
@@ -312,11 +321,9 @@ where
 	trace!("Starting new txhashset (readonly) extension.");
 
 	let head = batch.head()?;
-	let header_head = batch.header_head()?;
 
 	let res = {
-		let header_pmmr = PMMR::at(&mut handle.backend, handle.last_pos);
-		let mut header_extension = HeaderExtension::new(header_pmmr, &batch, header_head);
+		let mut header_extension = HeaderExtension::new(handle, &batch)?;
 		let mut extension = Extension::new(trees, &batch, head);
 		let mut extension_pair = ExtensionPair {
 			header_extension: &mut header_extension,
@@ -408,7 +415,6 @@ where
 	let rollback: bool;
 
 	let head = batch.head()?;
-	let header_head = batch.header_head()?;
 
 	// create a child transaction so if the state is rolled back by itself, all
 	// index saving can be undone
@@ -416,8 +422,7 @@ where
 	{
 		trace!("Starting new txhashset extension.");
 
-		let pmmr = PMMR::at(&mut header_pmmr.backend, header_pmmr.last_pos);
-		let mut header_extension = HeaderExtension::new(pmmr, &child_batch, header_head);
+		let mut header_extension = HeaderExtension::new(header_pmmr, &child_batch)?;
 		let mut extension = Extension::new(trees, &child_batch, head);
 		let mut extension_pair = ExtensionPair {
 			header_extension: &mut header_extension,
@@ -468,7 +473,6 @@ where
 /// to allow headers to be validated before we receive the full block data.
 pub fn header_extending<'a, F, T>(
 	handle: &'a mut PMMRHandle<BlockHeader>,
-	head: &Tip,
 	batch: &'a mut Batch<'_>,
 	inner: F,
 ) -> Result<T, Error>
@@ -483,8 +487,7 @@ where
 	// index saving can be undone
 	let child_batch = batch.child()?;
 	{
-		let pmmr = PMMR::at(&mut handle.backend, handle.last_pos);
-		let mut extension = HeaderExtension::new(pmmr, &child_batch, head.clone());
+		let mut extension = HeaderExtension::new(handle, &child_batch)?;
 		res = inner(&mut extension);
 
 		rollback = extension.rollback;
@@ -527,16 +530,19 @@ pub struct HeaderExtension<'a> {
 
 impl<'a> HeaderExtension<'a> {
 	fn new(
-		pmmr: PMMR<'a, BlockHeader, PMMRBackend<BlockHeader>>,
+		handle: &'a mut PMMRHandle<BlockHeader>,
 		batch: &'a Batch<'_>,
-		head: Tip,
-	) -> HeaderExtension<'a> {
-		HeaderExtension {
+	) -> Result<HeaderExtension<'a>, Error> {
+		let head_hash = handle.head_hash()?;
+		let header = batch.get_block_header(&head_hash)?;
+		let head = Tip::from_header(&header);
+		let pmmr = PMMR::at(&mut handle.backend, handle.last_pos);
+		Ok(HeaderExtension {
 			head,
 			pmmr,
 			rollback: false,
 			batch,
-		}
+		})
 	}
 
 	/// Get the header hash for the specified pos from the underlying MMR backend.
