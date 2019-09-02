@@ -1153,9 +1153,8 @@ impl Chain {
 	pub fn header_head(&self) -> Result<Tip, Error> {
 		let handle = self.header_pmmr.read();
 		let hash = handle.head_hash()?;
-		let header = self.store
-			.get_block_header(&hash)?;
-			// .map_err(|e| ErrorKind::StoreErr(e, "chain header head".to_owned()).into())?;
+		let header = self.store.get_block_header(&hash)?;
+		// .map_err(|e| ErrorKind::StoreErr(e, "chain header head".to_owned()).into())?;
 		Ok(Tip::from_header(&header))
 	}
 
@@ -1289,9 +1288,8 @@ impl Chain {
 	pub fn get_sync_head(&self) -> Result<Tip, Error> {
 		let handle = self.sync_pmmr.read();
 		let hash = handle.head_hash()?;
-		let header = self.store
-			.get_block_header(&hash)?;
-			// .map_err(|e| ErrorKind::StoreErr(e, "chain get sync head".to_owned()).into())?;
+		let header = self.store.get_block_header(&hash)?;
+		// .map_err(|e| ErrorKind::StoreErr(e, "chain get sync head".to_owned()).into())?;
 		Ok(Tip::from_header(&header))
 	}
 
