@@ -370,4 +370,68 @@ mod test {
 
 		tx.validate(Weighting::AsTransaction, vc.clone()).unwrap();
 	}
+
+	#[test]
+	fn test_transaction_malleability() {
+		let keychain = ExtKeychain::from_random_seed(false).unwrap();
+		let builder = ProofBuilder::new(&keychain);
+		let key_id1 = ExtKeychainPath::new(1, 1, 0, 0, 0).to_identifier();
+		let key_id2 = ExtKeychainPath::new(1, 2, 0, 0, 0).to_identifier();
+		let key_id3 = ExtKeychainPath::new(1, 3, 0, 0, 0).to_identifier();
+		let vc = verifier_cache();
+
+		let mut tx = transaction(
+			vec![input(6, key_id1), output(2, key_id2.clone()), with_fee(4)],
+			&keychain,
+			&builder,
+		)
+		.unwrap();
+
+		// Check this transaction is valid.
+		println!("{:?}", tx);
+		tx.validate(Weighting::AsTransaction, vc.clone()).unwrap();
+
+		// Build a replacement output and rangeproof and swap them in to the existing transaction.
+		{
+			let commit = keychain
+				.commit(2, &key_id3, &SwitchCommitmentType::Regular)
+				.unwrap();
+			let rproof = proof::create(
+				&keychain,
+				&builder,
+				2,
+				&key_id3,
+				&SwitchCommitmentType::Regular,
+				commit,
+				None,
+			)
+			.unwrap();
+			let new_output = Output {
+				features: OutputFeatures::Plain,
+				commit,
+				proof: rproof,
+			};
+
+			// Replace the existing output in the transaction with this new output.
+			tx.outputs_mut().clear();
+			tx.outputs_mut().push(new_output);
+		}
+
+		// Adjust the tx offset to compensate for this new output.
+		{
+			let offset = tx.offset.clone();
+			let blind_sum = BlindSum::new()
+				.add_blinding_factor(offset)
+				.add_key_id(key_id3.to_value_path(2))
+				.sub_key_id(key_id2.to_value_path(2));
+			let new_offset = keychain.blind_sum(&blind_sum).unwrap();
+			tx.offset = new_offset;
+		};
+
+		// Now confirm this resulting transaction is still valid.
+		println!("{:?}", tx);
+		tx.validate(Weighting::AsTransaction, vc.clone()).unwrap();
+
+		panic!("fail and dump stdout");
+	}
 }
