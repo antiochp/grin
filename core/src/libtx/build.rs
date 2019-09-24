@@ -372,6 +372,69 @@ mod test {
 	}
 
 	#[test]
+	fn test_transaction_malleability_add_zero_output() {
+		let keychain = ExtKeychain::from_random_seed(false).unwrap();
+		let builder = ProofBuilder::new(&keychain);
+		let key_id1 = ExtKeychainPath::new(1, 1, 0, 0, 0).to_identifier();
+		let key_id2 = ExtKeychainPath::new(1, 2, 0, 0, 0).to_identifier();
+		let key_id3 = ExtKeychainPath::new(1, 3, 0, 0, 0).to_identifier();
+		let vc = verifier_cache();
+
+		let mut tx = transaction(
+			vec![input(6, key_id1), output(2, key_id2.clone()), with_fee(4)],
+			&keychain,
+			&builder,
+		)
+		.unwrap();
+
+		// Check this transaction is valid.
+		println!("{:?}", tx);
+		tx.validate(Weighting::AsTransaction, vc.clone()).unwrap();
+
+		// Build a new zero value output and rangeproof and add them in to the existing transaction.
+		{
+			let commit = keychain
+				.commit(0, &key_id3, &SwitchCommitmentType::Regular)
+				.unwrap();
+			let rproof = proof::create(
+				&keychain,
+				&builder,
+				0,
+				&key_id3,
+				&SwitchCommitmentType::Regular,
+				commit,
+				None,
+			)
+			.unwrap();
+			let new_output = Output {
+				features: OutputFeatures::Plain,
+				commit,
+				proof: rproof,
+			};
+
+			// Add this new output to the tx.
+			tx.outputs_mut().push(new_output);
+			tx.outputs_mut().sort();
+		}
+
+		// Adjust the tx offset to compensate for this new zero value output.
+		{
+			let offset = tx.offset.clone();
+			let blind_sum = BlindSum::new()
+				.add_blinding_factor(offset)
+				.add_key_id(key_id3.to_value_path(0));
+			let new_offset = keychain.blind_sum(&blind_sum).unwrap();
+			tx.offset = new_offset;
+		};
+
+		// Now confirm this resulting transaction is still valid.
+		println!("{:?}", tx);
+		tx.validate(Weighting::AsTransaction, vc.clone()).unwrap();
+
+		panic!("fail and dump stdout");
+	}
+
+	#[test]
 	fn test_transaction_malleability() {
 		let keychain = ExtKeychain::from_random_seed(false).unwrap();
 		let builder = ProofBuilder::new(&keychain);
@@ -431,6 +494,96 @@ mod test {
 		// Now confirm this resulting transaction is still valid.
 		println!("{:?}", tx);
 		tx.validate(Weighting::AsTransaction, vc.clone()).unwrap();
+
+		panic!("fail and dump stdout");
+	}
+
+	#[test]
+	fn test_transaction_wtf() {
+		let keychain = ExtKeychain::from_random_seed(false).unwrap();
+		let builder = ProofBuilder::new(&keychain);
+		let key_id1 = ExtKeychainPath::new(1, 1, 0, 0, 0).to_identifier();
+		let key_id2 = ExtKeychainPath::new(1, 2, 0, 0, 0).to_identifier();
+		let key_id3 = ExtKeychainPath::new(1, 3, 0, 0, 0).to_identifier();
+		let key_id4 = ExtKeychainPath::new(1, 4, 0, 0, 0).to_identifier();
+		let vc = verifier_cache();
+
+		let mut tx1 = transaction(
+			vec![input(6, key_id1), output(2, key_id2.clone()), with_fee(4)],
+			&keychain,
+			&builder,
+		)
+		.unwrap();
+
+		// Check this transaction is valid.
+		println!("{:?}", tx1);
+		tx1.validate(Weighting::AsTransaction, vc.clone()).unwrap();
+
+		let tx2 = transaction(
+			vec![
+				input(7, key_id3.clone()),
+				output(3, key_id4.clone()),
+				with_fee(4),
+			],
+			&keychain,
+			&builder,
+		)
+		.unwrap();
+
+		// Check this transaction is valid.
+		println!("{:?}", tx2);
+		tx2.validate(Weighting::AsTransaction, vc.clone()).unwrap();
+
+		{
+			for out in tx2.outputs() {
+				tx1.outputs_mut().push(out.clone());
+			}
+			tx1.outputs_mut().sort();
+
+			for inp in tx2.inputs() {
+				tx1.inputs_mut().push(inp.clone());
+			}
+			tx1.inputs_mut().sort();
+		}
+
+		// Adjust the tx offset to compensate for this new output.
+		{
+			let blind_sum = BlindSum::new()
+				.add_blinding_factor(tx1.offset.clone())
+				.add_blinding_factor(tx2.offset.clone());
+			let new_offset = keychain.blind_sum(&blind_sum).unwrap();
+			tx1.offset = new_offset;
+		};
+
+		// Now do some real subversive stuff. Take the kernel from tx2 and pretend its an output.
+		{
+			let commit = tx2.kernels().first().unwrap().excess;
+			// let commit = keychain
+			// 	.commit(2, &key_id3, &SwitchCommitmentType::Regular)
+			// 	.unwrap();
+
+			// key4 - key3 I think?
+			let skey = foo;
+
+			let rproof = proof::create_with_secret_key(
+				&keychain, &builder, 2, skey, // &SwitchCommitmentType::Regular,
+				commit, None,
+			)
+			.unwrap();
+
+			let new_output = Output {
+				features: OutputFeatures::Plain,
+				commit,
+				proof: rproof,
+			};
+
+			tx1.outputs_mut().push(new_output);
+			tx1.outputs_mut().sort();
+		}
+
+		// Now confirm this resulting transaction is still valid.
+		println!("{:?}", tx1);
+		tx1.validate(Weighting::AsTransaction, vc.clone()).unwrap();
 
 		panic!("fail and dump stdout");
 	}

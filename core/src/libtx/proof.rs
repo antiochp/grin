@@ -57,6 +57,40 @@ where
 	))
 }
 
+/// Create a bulletproof
+pub fn create_with_secret_key<K, B>(
+	k: &K,
+	b: &B,
+	amount: u64,
+	// key_id: &Identifier,
+	skey: SecretKey,
+	//switch: &SwitchCommitmentType,
+	commit: Commitment,
+	extra_data: Option<Vec<u8>>,
+) -> Result<RangeProof, Error>
+where
+	K: Keychain,
+	B: ProofBuild,
+{
+	// TODO: proper support for different switch commitment schemes
+	// The new bulletproof scheme encodes and decodes it, but
+	// it is not supported at the wallet level (yet).
+	let secp = k.secp();
+	// let commit = k.commit(amount, key_id, switch)?;
+	// let skey = k.derive_key(amount, key_id, switch)?;
+	let rewind_nonce = b.rewind_nonce(secp, &commit)?;
+	let private_nonce = b.private_nonce(secp, &commit)?;
+	let message = ProofMessage::from_bytes(&[0; 0usize]); //b.proof_message(secp, key_id, switch)?;
+	Ok(secp.bullet_proof(
+		amount,
+		skey,
+		rewind_nonce,
+		private_nonce,
+		extra_data,
+		Some(message),
+	))
+}
+
 /// Verify a proof
 pub fn verify(
 	secp: &Secp256k1,
@@ -450,6 +484,34 @@ mod tests {
 		let keychain = ExtKeychain::from_random_seed(false).unwrap();
 		let builder = LegacyProofBuilder::new(&keychain);
 		let amount = rng.gen();
+		let id = ExtKeychain::derive_key_id(3, rng.gen(), rng.gen(), rng.gen(), 0);
+		let switch = SwitchCommitmentType::Regular;
+		let commit = keychain.commit(amount, &id, &switch).unwrap();
+		let proof = create(
+			&keychain,
+			&builder,
+			amount,
+			&id,
+			&switch,
+			commit.clone(),
+			None,
+		)
+		.unwrap();
+		assert!(verify(&keychain.secp(), commit.clone(), proof.clone(), None).is_ok());
+		let rewind = rewind(keychain.secp(), &builder, commit, None, proof).unwrap();
+		assert!(rewind.is_some());
+		let (r_amount, r_id, r_switch) = rewind.unwrap();
+		assert_eq!(r_amount, amount);
+		assert_eq!(r_id, id);
+		assert_eq!(r_switch, switch);
+	}
+
+	#[test]
+	fn legacy_builder_zero_value() {
+		let rng = &mut thread_rng();
+		let keychain = ExtKeychain::from_random_seed(false).unwrap();
+		let builder = LegacyProofBuilder::new(&keychain);
+		let amount = 0;
 		let id = ExtKeychain::derive_key_id(3, rng.gen(), rng.gen(), rng.gen(), 0);
 		let switch = SwitchCommitmentType::Regular;
 		let commit = keychain.commit(amount, &id, &switch).unwrap();
