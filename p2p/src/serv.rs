@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use crate::chain;
 use crate::core::core;
-use crate::core::core::hash::Hash;
+use crate::core::core::hash::{Hash, Hashed};
 use crate::core::global;
 use crate::core::pow::Difficulty;
 use crate::handshake::Handshake;
@@ -30,8 +30,8 @@ use crate::peer::Peer;
 use crate::peers::Peers;
 use crate::store::PeerStore;
 use crate::types::{
-	Capabilities, ChainAdapter, Error, NetAdapter, P2PConfig, PeerAddr, PeerInfo, ReasonForBan,
-	TxHashSetRead,
+	BlockHeaderResult, BlockResult, Capabilities, ChainAdapter, CompactBlockResult, Error,
+	NetAdapter, P2PConfig, PeerAddr, PeerInfo, ReasonForBan, TxHashSetRead, TxKernelResult,
 };
 use crate::util::StopState;
 use chrono::prelude::{DateTime, Utc};
@@ -272,8 +272,8 @@ impl ChainAdapter for DummyAdapter {
 		None
 	}
 
-	fn tx_kernel_received(&self, _h: Hash, _peer_info: &PeerInfo) -> Result<bool, chain::Error> {
-		Ok(true)
+	fn tx_kernel_received(&self, hash: Hash) -> TxKernelResult {
+		TxKernelResult::ShouldRequestTx(hash)
 	}
 	fn transaction_received(
 		&self,
@@ -284,20 +284,20 @@ impl ChainAdapter for DummyAdapter {
 	}
 	fn compact_block_received(
 		&self,
-		_cb: core::CompactBlock,
+		cb: core::CompactBlock,
 		_peer_info: &PeerInfo,
-	) -> Result<bool, chain::Error> {
-		Ok(true)
+	) -> CompactBlockResult {
+		CompactBlockResult::Ok(cb.hash())
 	}
 	fn header_received(
 		&self,
-		_bh: core::BlockHeader,
+		header: core::BlockHeader,
 		_peer_info: &PeerInfo,
-	) -> Result<bool, chain::Error> {
-		Ok(true)
+	) -> BlockHeaderResult {
+		BlockHeaderResult::ShouldRequestCompactBlock(header.hash())
 	}
-	fn block_received(&self, _: core::Block, _: &PeerInfo, _: bool) -> Result<bool, chain::Error> {
-		Ok(true)
+	fn block_received(&self, b: core::Block, _: &PeerInfo, _: bool) -> BlockResult {
+		BlockResult::Ok(b.hash())
 	}
 	fn headers_received(
 		&self,

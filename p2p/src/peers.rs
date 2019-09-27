@@ -30,8 +30,9 @@ use crate::core::pow::Difficulty;
 use crate::peer::Peer;
 use crate::store::{PeerData, PeerStore, State};
 use crate::types::{
-	Capabilities, ChainAdapter, Error, NetAdapter, P2PConfig, PeerAddr, PeerInfo, ReasonForBan,
-	TxHashSetRead, MAX_PEER_ADDRS,
+	BlockHeaderResult, BlockResult, Capabilities, ChainAdapter, CompactBlockResult, Error,
+	NetAdapter, P2PConfig, PeerAddr, PeerInfo, ReasonForBan, TxHashSetRead, TxKernelResult,
+	MAX_PEER_ADDRS,
 };
 use chrono::prelude::*;
 use chrono::Duration;
@@ -575,12 +576,8 @@ impl ChainAdapter for Peers {
 		self.adapter.get_transaction(kernel_hash)
 	}
 
-	fn tx_kernel_received(
-		&self,
-		kernel_hash: Hash,
-		peer_info: &PeerInfo,
-	) -> Result<bool, chain::Error> {
-		self.adapter.tx_kernel_received(kernel_hash, peer_info)
+	fn tx_kernel_received(&self, kernel_hash: Hash) -> TxKernelResult {
+		self.adapter.tx_kernel_received(kernel_hash)
 	}
 
 	fn transaction_received(
@@ -596,55 +593,53 @@ impl ChainAdapter for Peers {
 		b: core::Block,
 		peer_info: &PeerInfo,
 		was_requested: bool,
-	) -> Result<bool, chain::Error> {
+	) -> BlockResult {
 		let hash = b.hash();
-		if !self.adapter.block_received(b, peer_info, was_requested)? {
-			// if the peer sent us a block that's intrinsically bad
-			// they are either mistaken or malevolent, both of which require a ban
-			debug!(
-				"Received a bad block {} from  {}, the peer will be banned",
-				hash, peer_info.addr,
-			);
-			self.ban_peer(peer_info.addr, ReasonForBan::BadBlock);
-			Ok(false)
-		} else {
-			Ok(true)
+		let res = self.adapter.block_received(b, peer_info, was_requested);
+		match res {
+			BlockResult::SoBadWillBan => {
+				debug!(
+					"Received a bad block {} from {}, the peer will be banned.",
+					hash, peer_info.addr,
+				);
+				self.ban_peer(peer_info.addr, ReasonForBan::BadBlock);
+			}
+			_ => {}
 		}
+		res
 	}
 
 	fn compact_block_received(
 		&self,
 		cb: core::CompactBlock,
 		peer_info: &PeerInfo,
-	) -> Result<bool, chain::Error> {
+	) -> CompactBlockResult {
 		let hash = cb.hash();
-		if !self.adapter.compact_block_received(cb, peer_info)? {
-			// if the peer sent us a block that's intrinsically bad
-			// they are either mistaken or malevolent, both of which require a ban
-			debug!(
-				"Received a bad compact block {} from  {}, the peer will be banned",
-				hash, peer_info.addr
-			);
-			self.ban_peer(peer_info.addr, ReasonForBan::BadCompactBlock);
-			Ok(false)
-		} else {
-			Ok(true)
+		let res = self.adapter.compact_block_received(cb, peer_info);
+		match res {
+			CompactBlockResult::SoBadWillBan => {
+				// if the peer sent us a block that's intrinsically bad
+				// they are either mistaken or malevolent, both of which require a ban
+				debug!(
+					"Received a bad compact block {} from  {}, the peer will be banned.",
+					hash, peer_info.addr
+				);
+				self.ban_peer(peer_info.addr, ReasonForBan::BadCompactBlock);
+			}
+			_ => {}
 		}
+		res
 	}
 
-	fn header_received(
-		&self,
-		bh: core::BlockHeader,
-		peer_info: &PeerInfo,
-	) -> Result<bool, chain::Error> {
-		if !self.adapter.header_received(bh, peer_info)? {
-			// if the peer sent us a block header that's intrinsically bad
-			// they are either mistaken or malevolent, both of which require a ban
-			self.ban_peer(peer_info.addr, ReasonForBan::BadBlockHeader);
-			Ok(false)
-		} else {
-			Ok(true)
+	fn header_received(&self, bh: core::BlockHeader, peer_info: &PeerInfo) -> BlockHeaderResult {
+		let res = self.adapter.header_received(bh, peer_info);
+		match res {
+			BlockHeaderResult::SoBadWillBan => {
+				self.ban_peer(peer_info.addr, ReasonForBan::BadBlockHeader);
+			}
+			_ => {}
 		}
+		res
 	}
 
 	fn headers_received(

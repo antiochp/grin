@@ -14,6 +14,7 @@
 
 //! Message types that transit over the network and related serialization code.
 
+use crate::conn::Tracker;
 use crate::core::core::hash::Hash;
 use crate::core::core::BlockHeader;
 use crate::core::pow::Difficulty;
@@ -25,7 +26,10 @@ use crate::types::{
 	Capabilities, Error, PeerAddr, ReasonForBan, MAX_BLOCK_HEADERS, MAX_LOCATORS, MAX_PEER_ADDRS,
 };
 use num::FromPrimitive;
+use std::fs::File;
 use std::io::{Read, Write};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Grin's user agent with current version
 pub const USER_AGENT: &'static str = concat!("MW/Grin ", env!("CARGO_PKG_VERSION"));
@@ -200,15 +204,63 @@ pub fn write_to_buf<T: Writeable>(
 	Ok(msg_buf)
 }
 
-pub fn write_message<T: Writeable>(
-	stream: &mut dyn Write,
+pub fn write_to_msg<T: Writeable>(
 	msg: T,
 	msg_type: Type,
 	version: ProtocolVersion,
-) -> Result<(), Error> {
-	let buf = write_to_buf(msg, msg_type, version)?;
-	stream.write_all(&buf[..])?;
-	Ok(())
+) -> Result<Msg, Error> {
+	let mut body = vec![];
+	ser::serialize(&mut body, version, &msg)?;
+	let header = MsgHeader::new(msg_type, body.len() as u64);
+	Ok(Msg {
+		header,
+		body,
+		attachment: None,
+	})
+}
+
+#[derive(Clone)]
+pub struct Msg {
+	pub header: MsgHeader,
+	pub body: Vec<u8>,
+	pub attachment: Option<PathBuf>,
+}
+
+impl Msg {
+	pub fn write_to_stream(
+		mut self,
+		stream: &mut dyn Write,
+		tracker: Arc<Tracker>,
+	) -> Result<(), Error> {
+		let mut buf = vec![];
+		ser::serialize(&mut buf, ProtocolVersion::local(), &self.header)?;
+		buf.append(&mut self.body);
+		stream.write_all(&buf[..])?;
+
+		tracker.inc_sent(buf.len() as u64);
+
+		if let Some(path) = self.attachment {
+			let mut file = File::open(path)?;
+			let mut buf = [0u8; 8000];
+			loop {
+				match file.read(&mut buf[..]) {
+					Ok(0) => break,
+					Ok(n) => {
+						stream.write_all(&buf[..n])?;
+						// Increase sent bytes "quietly" without incrementing the counter.
+						// (In a loop here for the single attachment).
+						tracker.inc_quiet_sent(n as u64);
+					}
+					Err(e) => return Err(From::from(e)),
+				}
+			}
+		}
+		Ok(())
+	}
+
+	pub fn add_attachment(&mut self, attachment: PathBuf) {
+		self.attachment = Some(attachment)
+	}
 }
 
 /// A wrapper around a message header. If the header is for an unknown msg type
@@ -223,7 +275,7 @@ pub enum MsgHeaderWrapper {
 }
 
 /// Header of any protocol message, used to identify incoming messages.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MsgHeader {
 	magic: [u8; 2],
 	/// Type of the message.

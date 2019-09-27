@@ -19,12 +19,14 @@ use crate::msg::{
 	BanReason, GetPeerAddrs, Headers, KernelDataResponse, Locator, PeerAddrs, Ping, Pong,
 	TxHashSetArchive, TxHashSetRequest, Type,
 };
-use crate::types::{Error, NetAdapter, PeerInfo};
+use crate::types::{
+	BlockHeaderResult, BlockResult, CompactBlockResult, Error, NetAdapter, PeerInfo, TxKernelResult,
+};
 use chrono::prelude::Utc;
 use rand::{thread_rng, Rng};
 use std::cmp;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufWriter, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Seek, SeekFrom};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -54,9 +56,8 @@ impl MessageHandler for Protocol {
 	fn consume<'a>(
 		&self,
 		mut msg: Message<'a>,
-		writer: &'a mut dyn Write,
 		tracker: Arc<Tracker>,
-	) -> Result<Option<Response<'a>>, Error> {
+	) -> Result<Option<Response>, Error> {
 		let adapter = &self.adapter;
 
 		// If we received a msg from a banned peer then log and drop it.
@@ -82,7 +83,6 @@ impl MessageHandler for Protocol {
 						total_difficulty: adapter.total_difficulty()?,
 						height: adapter.total_height()?,
 					},
-					writer,
 				)?))
 			}
 
@@ -104,8 +104,14 @@ impl MessageHandler for Protocol {
 					"handle_payload: received tx kernel: {}, msg_len: {}",
 					h, msg.header.msg_len
 				);
-				adapter.tx_kernel_received(h, &self.peer_info)?;
-				Ok(None)
+				match adapter.tx_kernel_received(h) {
+					TxKernelResult::ShouldRequestTx(hash) => Ok(Some(Response::new(
+						Type::GetTransaction,
+						self.peer_info.version,
+						hash,
+					)?)),
+					_ => Ok(None),
+				}
 			}
 
 			Type::GetTransaction => {
@@ -120,7 +126,6 @@ impl MessageHandler for Protocol {
 						Type::Transaction,
 						self.peer_info.version,
 						tx,
-						writer,
 					)?))
 				} else {
 					Ok(None)
@@ -157,12 +162,7 @@ impl MessageHandler for Protocol {
 
 				let bo = adapter.get_block(h);
 				if let Some(b) = bo {
-					return Ok(Some(Response::new(
-						Type::Block,
-						self.peer_info.version,
-						b,
-						writer,
-					)?));
+					return Ok(Some(Response::new(Type::Block, self.peer_info.version, b)?));
 				}
 				Ok(None)
 			}
@@ -176,8 +176,14 @@ impl MessageHandler for Protocol {
 
 				// we can't know at this level whether we requested the block or not,
 				// the boolean should be properly set in higher level adapter
-				adapter.block_received(b, &self.peer_info, false)?;
-				Ok(None)
+				match adapter.block_received(b, &self.peer_info, false) {
+					BlockResult::ShouldRequestPreviousBlock(prev_hash) => Ok(Some(Response::new(
+						Type::GetBlock,
+						self.peer_info.version,
+						prev_hash,
+					)?)),
+					_ => Ok(None),
+				}
 			}
 
 			Type::GetCompactBlock => {
@@ -188,7 +194,6 @@ impl MessageHandler for Protocol {
 						Type::CompactBlock,
 						self.peer_info.version,
 						cb,
-						writer,
 					)?))
 				} else {
 					Ok(None)
@@ -201,9 +206,14 @@ impl MessageHandler for Protocol {
 					msg.header.msg_len
 				);
 				let b: core::CompactBlock = msg.body()?;
-
-				adapter.compact_block_received(b, &self.peer_info)?;
-				Ok(None)
+				match adapter.compact_block_received(b, &self.peer_info) {
+					CompactBlockResult::ShouldRequestFullBlock(hash) => Ok(Some(Response::new(
+						Type::GetBlock,
+						self.peer_info.version,
+						hash,
+					)?)),
+					_ => Ok(None),
+				}
 			}
 
 			Type::GetHeaders => {
@@ -216,7 +226,6 @@ impl MessageHandler for Protocol {
 					Type::Headers,
 					self.peer_info.version,
 					Headers { headers },
-					writer,
 				)?))
 			}
 
@@ -224,8 +233,14 @@ impl MessageHandler for Protocol {
 			// we can go request it from some of our peers
 			Type::Header => {
 				let header: core::BlockHeader = msg.body()?;
-				adapter.header_received(header, &self.peer_info)?;
-				Ok(None)
+				match adapter.header_received(header, &self.peer_info) {
+					BlockHeaderResult::ShouldRequestCompactBlock(hash) => Ok(Some(Response::new(
+						Type::GetCompactBlock,
+						self.peer_info.version,
+						hash,
+					)?)),
+					_ => Ok(None),
+				}
 			}
 
 			Type::Headers => {
@@ -262,7 +277,6 @@ impl MessageHandler for Protocol {
 					Type::PeerAddrs,
 					self.peer_info.version,
 					PeerAddrs { peers },
-					writer,
 				)?))
 			}
 
@@ -277,13 +291,13 @@ impl MessageHandler for Protocol {
 				let kernel_data = self.adapter.kernel_data_read()?;
 				let bytes = kernel_data.metadata()?.len();
 				let kernel_data_response = KernelDataResponse { bytes };
-				let mut response = Response::new(
+				let response = Response::new(
 					Type::KernelDataResponse,
 					self.peer_info.version,
 					&kernel_data_response,
-					writer,
 				)?;
-				response.add_attachment(kernel_data);
+				// TODO - we need an actual attachment here
+				// response.add_attachment(kernel_data);
 				Ok(Some(response))
 			}
 
@@ -336,7 +350,8 @@ impl MessageHandler for Protocol {
 				let txhashset = self.adapter.txhashset_read(txhashset_header_hash);
 
 				if let Some(txhashset) = txhashset {
-					let file_sz = txhashset.reader.metadata()?.len();
+					let zip = File::open(txhashset.path.clone())?;
+					let file_sz = zip.metadata()?.len();
 					let mut resp = Response::new(
 						Type::TxHashSetArchive,
 						self.peer_info.version,
@@ -345,9 +360,8 @@ impl MessageHandler for Protocol {
 							hash: txhashset_header_hash,
 							bytes: file_sz,
 						},
-						writer,
 					)?;
-					resp.add_attachment(txhashset.reader);
+					resp.add_attachment(txhashset.path);
 					Ok(Some(resp))
 				} else {
 					Ok(None)

@@ -687,7 +687,7 @@ impl Chain {
 	/// Provides a reading view into the current txhashset state as well as
 	/// the required indexes for a consumer to rewind to a consistent state
 	/// at the provided block hash.
-	pub fn txhashset_read(&self, h: Hash) -> Result<(u64, u64, File), Error> {
+	pub fn txhashset_read(&self, h: Hash) -> Result<(u64, u64, PathBuf), Error> {
 		// now we want to rewind the txhashset extension and
 		// sync a "rewound" copy of the leaf_set files to disk
 		// so we can send these across as part of the zip file.

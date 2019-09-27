@@ -33,8 +33,8 @@ use crate::msg::{
 };
 use crate::protocol::Protocol;
 use crate::types::{
-	Capabilities, ChainAdapter, Error, NetAdapter, P2PConfig, PeerAddr, PeerInfo, ReasonForBan,
-	TxHashSetRead,
+	BlockHeaderResult, BlockResult, Capabilities, ChainAdapter, CompactBlockResult, Error,
+	NetAdapter, P2PConfig, PeerAddr, PeerInfo, ReasonForBan, TxHashSetRead, TxKernelResult,
 };
 use chrono::prelude::{DateTime, Utc};
 
@@ -56,7 +56,7 @@ pub struct Peer {
 	// set of all hashes known to this peer (so no need to send)
 	tracking_adapter: TrackingAdapter,
 	tracker: Arc<conn::Tracker>,
-	send_handle: Mutex<conn::ConnHandle>,
+	send_handle: Arc<conn::ConnHandle>,
 	// we need a special lock for stop operation, can't reuse handle mutex for that
 	// because it may be locked by different reasons, so we should wait for that, close
 	// mutex can be taken only during shutdown, it happens once
@@ -84,7 +84,7 @@ impl Peer {
 		);
 		let tracker = Arc::new(conn::Tracker::new());
 		let (sendh, stoph) = conn::listen(conn, info.version, tracker.clone(), handler)?;
-		let send_handle = Mutex::new(sendh);
+		let send_handle = Arc::new(sendh);
 		let stop_handle = Mutex::new(stoph);
 		Ok(Peer {
 			info,
@@ -233,11 +233,7 @@ impl Peer {
 
 	/// Send a msg with given msg_type to our peer via the connection.
 	fn send<T: Writeable>(&self, msg: T, msg_type: Type) -> Result<(), Error> {
-		let bytes = self
-			.send_handle
-			.lock()
-			.send(msg, msg_type, self.info.version)?;
-		self.tracker.inc_sent(bytes);
+		self.send_handle.send(msg, msg_type, self.info.version)?;
 		Ok(())
 	}
 
@@ -360,25 +356,11 @@ impl Peer {
 		self.send(&Locator { hashes: locator }, msg::Type::GetHeaders)
 	}
 
-	pub fn send_tx_request(&self, h: Hash) -> Result<(), Error> {
-		debug!(
-			"Requesting tx (kernel hash) {} from peer {}.",
-			h, self.info.addr
-		);
-		self.send(&h, msg::Type::GetTransaction)
-	}
-
 	/// Sends a request for a specific block by hash
 	pub fn send_block_request(&self, h: Hash) -> Result<(), Error> {
 		debug!("Requesting block {} from peer {}.", h, self.info.addr);
 		self.tracking_adapter.push_req(h);
 		self.send(&h, msg::Type::GetBlock)
-	}
-
-	/// Sends a request for a specific compact block by hash
-	pub fn send_compact_block_request(&self, h: Hash) -> Result<(), Error> {
-		debug!("Requesting compact block {} from {}", h, self.info.addr);
-		self.send(&h, msg::Type::GetCompactBlock)
 	}
 
 	pub fn send_peer_request(&self, capab: Capabilities) -> Result<(), Error> {
@@ -494,13 +476,9 @@ impl ChainAdapter for TrackingAdapter {
 		self.adapter.get_transaction(kernel_hash)
 	}
 
-	fn tx_kernel_received(
-		&self,
-		kernel_hash: Hash,
-		peer_info: &PeerInfo,
-	) -> Result<bool, chain::Error> {
+	fn tx_kernel_received(&self, kernel_hash: Hash) -> TxKernelResult {
 		self.push_recv(kernel_hash);
-		self.adapter.tx_kernel_received(kernel_hash, peer_info)
+		self.adapter.tx_kernel_received(kernel_hash)
 	}
 
 	fn transaction_received(
@@ -523,7 +501,7 @@ impl ChainAdapter for TrackingAdapter {
 		b: core::Block,
 		peer_info: &PeerInfo,
 		_was_requested: bool,
-	) -> Result<bool, chain::Error> {
+	) -> BlockResult {
 		let bh = b.hash();
 		self.push_recv(bh);
 		self.adapter.block_received(b, peer_info, self.has_req(bh))
@@ -533,16 +511,12 @@ impl ChainAdapter for TrackingAdapter {
 		&self,
 		cb: core::CompactBlock,
 		peer_info: &PeerInfo,
-	) -> Result<bool, chain::Error> {
+	) -> CompactBlockResult {
 		self.push_recv(cb.hash());
 		self.adapter.compact_block_received(cb, peer_info)
 	}
 
-	fn header_received(
-		&self,
-		bh: core::BlockHeader,
-		peer_info: &PeerInfo,
-	) -> Result<bool, chain::Error> {
+	fn header_received(&self, bh: core::BlockHeader, peer_info: &PeerInfo) -> BlockHeaderResult {
 		self.push_recv(bh.hash());
 		self.adapter.header_received(bh, peer_info)
 	}

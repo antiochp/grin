@@ -1322,7 +1322,7 @@ impl<'a> Extension<'a> {
 
 /// Packages the txhashset data files into a zip and returns a Read to the
 /// resulting file
-pub fn zip_read(root_dir: String, header: &BlockHeader) -> Result<File, Error> {
+pub fn zip_read(root_dir: String, header: &BlockHeader) -> Result<PathBuf, Error> {
 	let txhashset_zip = format!("{}_{}.zip", TXHASHSET_ZIP, header.hash().to_string());
 
 	let txhashset_path = Path::new(&root_dir).join(TXHASHSET_SUBDIR);
@@ -1330,8 +1330,8 @@ pub fn zip_read(root_dir: String, header: &BlockHeader) -> Result<File, Error> {
 
 	// if file exist, just re-use it
 	let zip_file = File::open(zip_path.clone());
-	if let Ok(zip) = zip_file {
-		return Ok(zip);
+	if let Ok(_) = zip_file {
+		return Ok(zip_path);
 	} else {
 		// clean up old zips.
 		// Theoretically, we only need clean-up those zip files older than STATE_SYNC_THRESHOLD.
@@ -1347,7 +1347,7 @@ pub fn zip_read(root_dir: String, header: &BlockHeader) -> Result<File, Error> {
 	}
 
 	// otherwise, create the zip archive
-	let path_to_be_cleanup = {
+	let path_to_cleanup = {
 		// Temp txhashset directory
 		let temp_txhashset_path = Path::new(&root_dir).join(format!(
 			"{}_zip_{}",
@@ -1372,17 +1372,17 @@ pub fn zip_read(root_dir: String, header: &BlockHeader) -> Result<File, Error> {
 	};
 
 	// open it again to read it back
-	let zip_file = File::open(zip_path.clone())?;
+	// let zip_file = File::open(zip_path.clone())?;
 
 	// clean-up temp txhashset directory.
-	if let Err(e) = fs::remove_dir_all(&path_to_be_cleanup) {
+	if let Err(e) = fs::remove_dir_all(&path_to_cleanup) {
 		warn!(
 			"txhashset zip file: {:?} fail to remove, err: {}",
-			zip_path.to_str(),
+			path_to_cleanup.to_str(),
 			e
 		);
 	}
-	Ok(zip_file)
+	Ok(zip_path)
 }
 
 // Explicit list of files to extract from our zip archive.

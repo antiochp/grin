@@ -110,6 +110,33 @@ impl<T> From<mpsc::TrySendError<T>> for Error {
 	}
 }
 
+pub enum TxKernelResult {
+	ShouldRequestTx(Hash),
+	Ignore(Hash),
+}
+
+pub enum BlockHeaderResult {
+	ShouldRequestCompactBlock(Hash),
+	SoBadWillBan,
+	Ignore(Hash),
+}
+
+pub enum BlockResult {
+	Ok(Hash),
+	Orphan(Hash),
+	ShouldRequestPreviousBlock(Hash),
+	SoBadWillBan,
+	Ignore(Hash),
+}
+
+pub enum CompactBlockResult {
+	Ok(Hash),
+	Orphan(Hash),
+	ShouldRequestFullBlock(Hash),
+	SoBadWillBan,
+	Ignore(Hash),
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PeerAddr(pub SocketAddr);
 
@@ -493,8 +520,8 @@ pub struct TxHashSetRead {
 	pub output_index: u64,
 	/// Kernel tree index the receiver should rewind to
 	pub kernel_index: u64,
-	/// Binary stream for the txhashset zipped data
-	pub reader: File,
+	/// The path to the txhashset zip file
+	pub path: PathBuf,
 }
 
 /// Bridge between the networking layer and the rest of the system. Handles the
@@ -513,11 +540,7 @@ pub trait ChainAdapter: Sync + Send {
 
 	fn get_transaction(&self, kernel_hash: Hash) -> Option<core::Transaction>;
 
-	fn tx_kernel_received(
-		&self,
-		kernel_hash: Hash,
-		peer_info: &PeerInfo,
-	) -> Result<bool, chain::Error>;
+	fn tx_kernel_received(&self, kernel_hash: Hash) -> TxKernelResult;
 
 	/// A block has been received from one of our peers. Returns true if the
 	/// block could be handled properly and is not deemed defective by the
@@ -528,19 +551,15 @@ pub trait ChainAdapter: Sync + Send {
 		b: core::Block,
 		peer_info: &PeerInfo,
 		was_requested: bool,
-	) -> Result<bool, chain::Error>;
+	) -> BlockResult;
 
 	fn compact_block_received(
 		&self,
 		cb: core::CompactBlock,
 		peer_info: &PeerInfo,
-	) -> Result<bool, chain::Error>;
+	) -> CompactBlockResult;
 
-	fn header_received(
-		&self,
-		bh: core::BlockHeader,
-		peer_info: &PeerInfo,
-	) -> Result<bool, chain::Error>;
+	fn header_received(&self, bh: core::BlockHeader, peer_info: &PeerInfo) -> BlockHeaderResult;
 
 	/// A set of block header has been received, typically in response to a
 	/// block
