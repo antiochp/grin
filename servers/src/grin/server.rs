@@ -199,7 +199,6 @@ impl Server {
 			shared_chain.clone(),
 			tx_pool.clone(),
 			verifier_cache.clone(),
-			config.clone(),
 			init_net_hooks(&config),
 		));
 

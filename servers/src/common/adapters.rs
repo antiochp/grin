@@ -50,7 +50,6 @@ pub struct NetToChainAdapter {
 	tx_pool: Arc<RwLock<pool::TransactionPool>>,
 	verifier_cache: Arc<RwLock<dyn VerifierCache>>,
 	peers: OneTime<Weak<p2p::Peers>>,
-	config: ServerConfig,
 	hooks: Vec<Box<dyn NetEvents + Send + Sync>>,
 }
 
@@ -116,9 +115,13 @@ impl p2p::ChainAdapter for NetToChainAdapter {
 		peer_info: &PeerInfo,
 		was_requested: bool,
 	) -> BlockResult {
+		let bhash = b.hash();
+		if self.is_known_head(&b.header) {
+			return BlockResult::Ignore(bhash);
+		}
 		debug!(
 			"Received block {} at {} from {} [in/out/kern: {}/{}/{}] going to process.",
-			b.hash(),
+			bhash,
 			b.header.height,
 			peer_info.addr,
 			b.inputs().len(),
@@ -137,7 +140,9 @@ impl p2p::ChainAdapter for NetToChainAdapter {
 		if self.sync_state.is_syncing() {
 			return CompactBlockResult::Ignore(bhash);
 		}
-
+		if self.is_known_head(&cb.header) {
+			return CompactBlockResult::Ignore(bhash);
+		}
 		debug!(
 			"Received compact_block {} at {} from {} [out/kern/kern_ids: {}/{}/{}] going to process.",
 			bhash,
@@ -234,6 +239,10 @@ impl p2p::ChainAdapter for NetToChainAdapter {
 	}
 
 	fn header_received(&self, bh: core::BlockHeader, peer_info: &PeerInfo) -> BlockHeaderResult {
+		let bhash = bh.hash();
+		if self.is_known_head(&bh) {
+			return BlockHeaderResult::Ignore(bhash);
+		}
 		if !self.sync_state.is_syncing() {
 			for hook in &self.hooks {
 				hook.on_header_received(&bh, &peer_info.addr);
@@ -249,7 +258,7 @@ impl p2p::ChainAdapter for NetToChainAdapter {
 		if let Err(e) = res {
 			debug!(
 				"Block header {} refused by chain: {:?}",
-				bh.hash(),
+				bhash,
 				e.kind()
 			);
 			if e.is_bad_data() {
@@ -257,7 +266,7 @@ impl p2p::ChainAdapter for NetToChainAdapter {
 			} else {
 				// we got an error when trying to process the block header
 				// but nothing serious enough to need to ban the peer upstream
-				return BlockHeaderResult::Ignore(bh.hash());
+				return BlockHeaderResult::Ignore(bhash);
 			}
 		}
 
@@ -453,7 +462,6 @@ impl NetToChainAdapter {
 		chain: Arc<chain::Chain>,
 		tx_pool: Arc<RwLock<pool::TransactionPool>>,
 		verifier_cache: Arc<RwLock<dyn VerifierCache>>,
-		config: ServerConfig,
 		hooks: Vec<Box<dyn NetEvents + Send + Sync>>,
 	) -> NetToChainAdapter {
 		NetToChainAdapter {
@@ -462,7 +470,6 @@ impl NetToChainAdapter {
 			tx_pool,
 			verifier_cache,
 			peers: OneTime::new(),
-			config,
 			hooks,
 		}
 	}
@@ -473,11 +480,13 @@ impl NetToChainAdapter {
 		self.peers.init(Arc::downgrade(&peers));
 	}
 
-	fn peers(&self) -> Arc<p2p::Peers> {
-		self.peers
-			.borrow()
-			.upgrade()
-			.expect("Failed to upgrade weak ref to our peers.")
+	fn is_known_head(&self, header: &BlockHeader) -> bool {
+		if let Ok(head) = self.chain().head() {
+			if header.hash() == head.last_block_h || header.hash() == head.prev_block_h {
+				return true;
+			}
+		}
+		false
 	}
 
 	fn chain(&self) -> Arc<chain::Chain> {
