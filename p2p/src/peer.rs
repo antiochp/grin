@@ -33,8 +33,8 @@ use crate::msg::{
 };
 use crate::protocol::Protocol;
 use crate::types::{
-	BlockHeaderResult, BlockResult, Capabilities, ChainAdapter, CompactBlockResult, Error,
-	NetAdapter, P2PConfig, PeerAddr, PeerInfo, ReasonForBan, TxHashSetRead, TxKernelResult,
+	BlockHeaderResult, BlockResult, Capabilities, ChainAdapter, Error, NetAdapter, P2PConfig,
+	PeerAddr, PeerInfo, ReasonForBan, TxHashSetRead, TxKernelResult,
 };
 use chrono::prelude::{DateTime, Utc};
 
@@ -507,11 +507,7 @@ impl ChainAdapter for TrackingAdapter {
 		self.adapter.block_received(b, peer_info, self.has_req(bh))
 	}
 
-	fn compact_block_received(
-		&self,
-		cb: core::CompactBlock,
-		peer_info: &PeerInfo,
-	) -> CompactBlockResult {
+	fn compact_block_received(&self, cb: core::CompactBlock, peer_info: &PeerInfo) -> BlockResult {
 		self.push_recv(cb.hash());
 		self.adapter.compact_block_received(cb, peer_info)
 	}

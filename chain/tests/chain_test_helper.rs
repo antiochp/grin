@@ -113,7 +113,7 @@ where
 		b.header.pow.proof.edge_bits = edge_bits;
 
 		let bhash = b.hash();
-		chain.process_block(b, Options::MINE).unwrap();
+		chain.process_block(b, Options::NONE).unwrap();
 
 		// checking our new head
 		let head = chain.head().unwrap();

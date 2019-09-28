@@ -162,8 +162,8 @@ impl CompactBlock {
 	}
 }
 
-impl From<Block> for CompactBlock {
-	fn from(block: Block) -> Self {
+impl From<&Block> for CompactBlock {
+	fn from(block: &Block) -> Self {
 		let header = block.header.clone();
 		let nonce = thread_rng().gen();
 

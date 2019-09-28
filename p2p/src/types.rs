@@ -112,29 +112,24 @@ impl<T> From<mpsc::TrySendError<T>> for Error {
 
 pub enum TxKernelResult {
 	ShouldRequestTx(Hash),
-	Ignore(Hash),
+	Ignore,
+	Known,
 }
 
 pub enum BlockHeaderResult {
-	ShouldRequestCompactBlock(Hash),
+	ShouldRequestCompactBlock(core::BlockHeader),
 	SoBadWillBan,
-	Ignore(Hash),
+	Ignore,
+	Known,
 }
 
 pub enum BlockResult {
-	Ok(Hash),
-	Orphan(Hash),
-	ShouldRequestPreviousBlock(Hash),
+	Accepted,
+	Orphan(core::BlockHeader),
+	ShouldRequestFullBlock(core::BlockHeader),
 	SoBadWillBan,
-	Ignore(Hash),
-}
-
-pub enum CompactBlockResult {
-	Ok(Hash),
-	Orphan(Hash),
-	ShouldRequestFullBlock(Hash),
-	SoBadWillBan,
-	Ignore(Hash),
+	Ignore,
+	Known,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -553,11 +548,7 @@ pub trait ChainAdapter: Sync + Send {
 		was_requested: bool,
 	) -> BlockResult;
 
-	fn compact_block_received(
-		&self,
-		cb: core::CompactBlock,
-		peer_info: &PeerInfo,
-	) -> CompactBlockResult;
+	fn compact_block_received(&self, cb: core::CompactBlock, peer_info: &PeerInfo) -> BlockResult;
 
 	fn header_received(&self, bh: core::BlockHeader, peer_info: &PeerInfo) -> BlockHeaderResult;
 

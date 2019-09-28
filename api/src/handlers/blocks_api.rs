@@ -102,7 +102,8 @@ impl BlockHandler {
 	fn get_compact_block(&self, h: &Hash) -> Result<CompactBlockPrintable, Error> {
 		let chain = w(&self.chain)?;
 		let block = chain.get_block(h).context(ErrorKind::NotFound)?;
-		CompactBlockPrintable::from_compact_block(&block.into(), chain)
+		let cb = (&block).into();
+		CompactBlockPrintable::from_compact_block(cb, chain)
 			.map_err(|_| ErrorKind::Internal("chain error".to_owned()).into())
 	}
 

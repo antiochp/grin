@@ -20,9 +20,9 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use crate::chain;
+use crate::chain::{self, SyncState};
 use crate::core::core;
-use crate::core::core::hash::{Hash, Hashed};
+use crate::core::core::hash::Hash;
 use crate::core::global;
 use crate::core::pow::Difficulty;
 use crate::handshake::Handshake;
@@ -30,8 +30,8 @@ use crate::peer::Peer;
 use crate::peers::Peers;
 use crate::store::PeerStore;
 use crate::types::{
-	BlockHeaderResult, BlockResult, Capabilities, ChainAdapter, CompactBlockResult, Error,
-	NetAdapter, P2PConfig, PeerAddr, PeerInfo, ReasonForBan, TxHashSetRead, TxKernelResult,
+	BlockHeaderResult, BlockResult, Capabilities, ChainAdapter, Error, NetAdapter, P2PConfig,
+	PeerAddr, PeerInfo, ReasonForBan, TxHashSetRead, TxKernelResult,
 };
 use crate::util::StopState;
 use chrono::prelude::{DateTime, Utc};
@@ -55,13 +55,19 @@ impl Server {
 		config: P2PConfig,
 		adapter: Arc<dyn ChainAdapter>,
 		genesis: Hash,
+		sync_state: Arc<SyncState>,
 		stop_state: Arc<StopState>,
 	) -> Result<Server, Error> {
 		Ok(Server {
 			config: config.clone(),
 			capabilities: capab,
 			handshake: Arc::new(Handshake::new(genesis, config.clone())),
-			peers: Arc::new(Peers::new(PeerStore::new(db_root)?, adapter, config)),
+			peers: Arc::new(Peers::new(
+				PeerStore::new(db_root)?,
+				adapter,
+				sync_state,
+				config,
+			)),
 			stop_state,
 		})
 	}
@@ -284,20 +290,20 @@ impl ChainAdapter for DummyAdapter {
 	}
 	fn compact_block_received(
 		&self,
-		cb: core::CompactBlock,
+		_cb: core::CompactBlock,
 		_peer_info: &PeerInfo,
-	) -> CompactBlockResult {
-		CompactBlockResult::Ok(cb.hash())
+	) -> BlockResult {
+		BlockResult::Accepted
 	}
 	fn header_received(
 		&self,
 		header: core::BlockHeader,
 		_peer_info: &PeerInfo,
 	) -> BlockHeaderResult {
-		BlockHeaderResult::ShouldRequestCompactBlock(header.hash())
+		BlockHeaderResult::ShouldRequestCompactBlock(header)
 	}
-	fn block_received(&self, b: core::Block, _: &PeerInfo, _: bool) -> BlockResult {
-		BlockResult::Ok(b.hash())
+	fn block_received(&self, _b: core::Block, _: &PeerInfo, _: bool) -> BlockResult {
+		BlockResult::Accepted
 	}
 	fn headers_received(
 		&self,

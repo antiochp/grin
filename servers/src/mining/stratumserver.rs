@@ -37,10 +37,11 @@ use crate::common::stats::{StratumStats, WorkerStats};
 use crate::common::types::StratumServerConfig;
 use crate::core::core::hash::Hashed;
 use crate::core::core::verifier_cache::VerifierCache;
-use crate::core::core::Block;
+use crate::core::core::{Block, CompactBlock};
 use crate::core::{pow, ser};
 use crate::keychain;
 use crate::mining::mine_block;
+use crate::p2p;
 use crate::pool;
 use crate::util;
 
@@ -198,6 +199,7 @@ struct Handler {
 	workers: Arc<WorkersList>,
 	sync_state: Arc<SyncState>,
 	chain: Arc<chain::Chain>,
+	peers: Arc<p2p::Peers>,
 	current_state: Arc<RwLock<State>>,
 }
 
@@ -208,12 +210,14 @@ impl Handler {
 		sync_state: Arc<SyncState>,
 		minimum_share_difficulty: u64,
 		chain: Arc<chain::Chain>,
+		peers: Arc<p2p::Peers>,
 	) -> Self {
 		Handler {
-			id: id,
+			id,
 			workers: Arc::new(WorkersList::new(stratum_stats.clone())),
-			sync_state: sync_state,
-			chain: chain,
+			sync_state,
+			chain,
+			peers,
 			current_state: Arc::new(RwLock::new(State::new(minimum_share_difficulty))),
 		}
 	}
@@ -224,6 +228,7 @@ impl Handler {
 			stratum.sync_state.clone(),
 			stratum.config.minimum_share_difficulty,
 			stratum.chain.clone(),
+			stratum.peers.clone(),
 		)
 	}
 	fn handle_rpc_requests(&self, request: RpcRequest, worker_id: usize) -> String {
@@ -406,17 +411,20 @@ impl Handler {
 			return Err(RpcError::too_low_difficulty());
 		}
 
+		let header = b.header.clone();
+
 		// If the difficulty is high enough, submit it (which also validates it)
 		if share_difficulty >= state.current_difficulty {
 			// This is a full solution, submit it to the network
-			let res = self.chain.process_block(b.clone(), chain::Options::MINE);
+			let cb: CompactBlock = (&b).into();
+			let res = self.chain.process_block(b, chain::Options::NONE);
 			if let Err(e) = res {
 				// Return error status
 				error!(
 						"(Server ID: {}) Failed to validate solution at height {}, hash {}, edge_bits {}, nonce {}, job_id {}, {}: {}",
 						self.id,
 						params.height,
-						b.hash(),
+						header.hash(),
 						params.edge_bits,
 						params.nonce,
 						params.job_id,
@@ -428,6 +436,10 @@ impl Handler {
 				return Err(RpcError::cannot_validate());
 			}
 			share_is_block = true;
+
+			// Broadcast this new block out to our peers.
+			let _ = self.peers.broadcast_compact_block(&cb);
+
 			self.workers
 				.update_stats(worker_id, |worker_stats| worker_stats.num_blocks_found += 1);
 			// Log message to make it obvious we found a block
@@ -435,7 +447,7 @@ impl Handler {
 			warn!(
 					"(Server ID: {}) Solution Found for block {}, hash {} - Yay!!! Worker ID: {}, blocks found: {}, shares: {}",
 					self.id, params.height,
-					b.hash(),
+					header.hash(),
 					stats.id,
 					stats.num_blocks_found,
 					stats.num_accepted,
@@ -470,10 +482,10 @@ impl Handler {
 		info!(
 				"(Server ID: {}) Got share at height {}, hash {}, edge_bits {}, nonce {}, job_id {}, difficulty {}/{}, submitted by {}",
 				self.id,
-				b.header.height,
-				b.hash(),
-				b.header.pow.proof.edge_bits,
-				b.header.pow.nonce,
+				header.height,
+				header.hash(),
+				header.pow.proof.edge_bits,
+				header.pow.nonce,
 				params.job_id,
 				share_difficulty,
 				state.current_difficulty,
@@ -483,7 +495,7 @@ impl Handler {
 			.update_stats(worker_id, |worker_stats| worker_stats.num_accepted += 1);
 		let submit_response;
 		if share_is_block {
-			submit_response = format!("blockfound - {}", b.hash().to_hex());
+			submit_response = format!("blockfound - {}", header.hash().to_hex());
 		} else {
 			submit_response = "ok".to_string();
 		}
@@ -780,6 +792,7 @@ pub struct StratumServer {
 	id: String,
 	config: StratumServerConfig,
 	chain: Arc<chain::Chain>,
+	peers: Arc<p2p::Peers>,
 	tx_pool: Arc<RwLock<pool::TransactionPool>>,
 	verifier_cache: Arc<RwLock<dyn VerifierCache>>,
 	sync_state: Arc<SyncState>,
@@ -791,6 +804,7 @@ impl StratumServer {
 	pub fn new(
 		config: StratumServerConfig,
 		chain: Arc<chain::Chain>,
+		peers: Arc<p2p::Peers>,
 		tx_pool: Arc<RwLock<pool::TransactionPool>>,
 		verifier_cache: Arc<RwLock<dyn VerifierCache>>,
 		stratum_stats: Arc<RwLock<StratumStats>>,
@@ -799,6 +813,7 @@ impl StratumServer {
 			id: String::from("0"),
 			config,
 			chain,
+			peers,
 			tx_pool,
 			verifier_cache,
 			sync_state: Arc::new(SyncState::new()),

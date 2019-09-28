@@ -25,9 +25,10 @@ use crate::chain;
 use crate::common::types::StratumServerConfig;
 use crate::core::core::hash::{Hash, Hashed};
 use crate::core::core::verifier_cache::VerifierCache;
-use crate::core::core::{Block, BlockHeader};
+use crate::core::core::{Block, BlockHeader, CompactBlock};
 use crate::core::global;
 use crate::mining::mine_block;
+use crate::p2p;
 use crate::pool;
 use crate::util::StopState;
 use grin_chain::SyncState;
@@ -37,6 +38,7 @@ use std::time::Duration;
 pub struct Miner {
 	config: StratumServerConfig,
 	chain: Arc<chain::Chain>,
+	peers: Arc<p2p::Peers>,
 	tx_pool: Arc<RwLock<pool::TransactionPool>>,
 	verifier_cache: Arc<RwLock<dyn VerifierCache>>,
 	stop_state: Arc<StopState>,
@@ -52,6 +54,7 @@ impl Miner {
 	pub fn new(
 		config: StratumServerConfig,
 		chain: Arc<chain::Chain>,
+		peers: Arc<p2p::Peers>,
 		tx_pool: Arc<RwLock<pool::TransactionPool>>,
 		verifier_cache: Arc<RwLock<dyn VerifierCache>>,
 		stop_state: Arc<StopState>,
@@ -60,6 +63,7 @@ impl Miner {
 		Miner {
 			config,
 			chain,
+			peers,
 			tx_pool,
 			verifier_cache,
 			debug_output_id: String::from("none"),
@@ -178,13 +182,18 @@ impl Miner {
 					b.hash(),
 					b.header.prev_root,
 				);
-				let res = self.chain.process_block(b, chain::Options::MINE);
+				let cb: CompactBlock = (&b).into();
+				let res = self.chain.process_block(b, chain::Options::NONE);
 				if let Err(e) = res {
 					error!(
 						"(Server ID: {}) Error validating mined block: {:?}",
 						self.debug_output_id, e
 					);
 				}
+
+				// Broadcast this new block out to all our peers.
+				let _ = self.peers.broadcast_compact_block(&cb);
+
 				trace!("resetting key_id in miner to None");
 				key_id = None;
 			} else {

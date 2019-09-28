@@ -33,8 +33,6 @@ bitflags! {
 		const SKIP_POW = 0b00000001;
 		/// Adds block while in syncing mode.
 		const SYNC = 0b00000010;
-		/// Block validation on a block we mined ourselves
-		const MINE = 0b00000100;
 	}
 }
 

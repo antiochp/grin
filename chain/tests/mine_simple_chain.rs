@@ -708,7 +708,7 @@ fn output_header_mappings() {
 			.unwrap();
 			b.header.pow.proof.edge_bits = edge_bits;
 
-			chain.process_block(b, chain::Options::MINE).unwrap();
+			chain.process_block(b, chain::Options::NONE).unwrap();
 
 			let header_for_output = chain
 				.get_header_for_output(&OutputIdentifier::from_output(&reward_outputs[n - 1]))

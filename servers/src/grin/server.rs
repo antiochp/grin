@@ -33,7 +33,7 @@ use crate::api;
 use crate::api::TLSConfig;
 use crate::chain::{self, SyncState, SyncStatus};
 use crate::common::adapters::{
-	ChainToPoolAndNetAdapter, NetToChainAdapter, PoolToChainAdapter, PoolToNetAdapter,
+	ChainToPoolAdapter, NetToChainAdapter, PoolToChainAdapter, PoolToNetAdapter,
 };
 use crate::common::hooks::{init_chain_hooks, init_net_hooks};
 use crate::common::stats::{
@@ -169,7 +169,7 @@ impl Server {
 
 		let sync_state = Arc::new(SyncState::new());
 
-		let chain_adapter = Arc::new(ChainToPoolAndNetAdapter::new(
+		let chain_adapter = Arc::new(ChainToPoolAdapter::new(
 			tx_pool.clone(),
 			init_chain_hooks(&config),
 		));
@@ -208,13 +208,12 @@ impl Server {
 			config.p2p_config.clone(),
 			net_adapter.clone(),
 			genesis.hash(),
+			sync_state.clone(),
 			stop_state.clone(),
 		)?);
 
-		// Initialize various adapters with our dynamic set of connected peers.
-		chain_adapter.init(p2p_server.peers.clone());
+		// Initialize adapters with our dynamic set of connected peers.
 		pool_net_adapter.init(p2p_server.peers.clone());
-		net_adapter.init(p2p_server.peers.clone());
 
 		let mut connect_thread = None;
 
@@ -350,6 +349,7 @@ impl Server {
 		let mut stratum_server = stratumserver::StratumServer::new(
 			config.clone(),
 			self.chain.clone(),
+			self.p2p.peers.clone(),
 			self.tx_pool.clone(),
 			self.verifier_cache.clone(),
 			self.state_info.stratum_stats.clone(),
@@ -388,6 +388,7 @@ impl Server {
 		let mut miner = Miner::new(
 			config.clone(),
 			self.chain.clone(),
+			self.p2p.peers.clone(),
 			self.tx_pool.clone(),
 			self.verifier_cache.clone(),
 			stop_state,

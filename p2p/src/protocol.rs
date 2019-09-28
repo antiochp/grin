@@ -19,9 +19,7 @@ use crate::msg::{
 	BanReason, GetPeerAddrs, Headers, KernelDataResponse, Locator, PeerAddrs, Ping, Pong,
 	TxHashSetArchive, TxHashSetRequest, Type,
 };
-use crate::types::{
-	BlockHeaderResult, BlockResult, CompactBlockResult, Error, NetAdapter, PeerInfo, TxKernelResult,
-};
+use crate::types::{BlockHeaderResult, BlockResult, Error, NetAdapter, PeerInfo, TxKernelResult};
 use chrono::prelude::Utc;
 use rand::{thread_rng, Rng};
 use std::cmp;
@@ -177,10 +175,10 @@ impl MessageHandler for Protocol {
 				// we can't know at this level whether we requested the block or not,
 				// the boolean should be properly set in higher level adapter
 				match adapter.block_received(b, &self.peer_info, false) {
-					BlockResult::ShouldRequestPreviousBlock(prev_hash) => Ok(Some(Response::new(
+					BlockResult::Orphan(ref header) => Ok(Some(Response::new(
 						Type::GetBlock,
 						self.peer_info.version,
-						prev_hash,
+						header.prev_hash,
 					)?)),
 					_ => Ok(None),
 				}
@@ -189,7 +187,7 @@ impl MessageHandler for Protocol {
 			Type::GetCompactBlock => {
 				let h: Hash = msg.body()?;
 				if let Some(b) = adapter.get_block(h) {
-					let cb: CompactBlock = b.into();
+					let cb: CompactBlock = (&b).into();
 					Ok(Some(Response::new(
 						Type::CompactBlock,
 						self.peer_info.version,
@@ -207,10 +205,15 @@ impl MessageHandler for Protocol {
 				);
 				let b: core::CompactBlock = msg.body()?;
 				match adapter.compact_block_received(b, &self.peer_info) {
-					CompactBlockResult::ShouldRequestFullBlock(hash) => Ok(Some(Response::new(
+					BlockResult::ShouldRequestFullBlock(ref header) => Ok(Some(Response::new(
 						Type::GetBlock,
 						self.peer_info.version,
-						hash,
+						header.hash(),
+					)?)),
+					BlockResult::Orphan(ref header) => Ok(Some(Response::new(
+						Type::GetBlock,
+						self.peer_info.version,
+						header.prev_hash,
 					)?)),
 					_ => Ok(None),
 				}
@@ -229,16 +232,16 @@ impl MessageHandler for Protocol {
 				)?))
 			}
 
-			// "header first" block propagation - if we have not yet seen this block
-			// we can go request it from some of our peers
 			Type::Header => {
 				let header: core::BlockHeader = msg.body()?;
 				match adapter.header_received(header, &self.peer_info) {
-					BlockHeaderResult::ShouldRequestCompactBlock(hash) => Ok(Some(Response::new(
-						Type::GetCompactBlock,
-						self.peer_info.version,
-						hash,
-					)?)),
+					BlockHeaderResult::ShouldRequestCompactBlock(ref header) => {
+						Ok(Some(Response::new(
+							Type::GetCompactBlock,
+							self.peer_info.version,
+							header.hash(),
+						)?))
+					}
 					_ => Ok(None),
 				}
 			}

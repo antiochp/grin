@@ -22,7 +22,7 @@ use std::sync::Arc;
 use rand::seq::SliceRandom;
 use rand::thread_rng;
 
-use crate::chain;
+use crate::chain::{self, SyncState};
 use crate::core::core;
 use crate::core::core::hash::{Hash, Hashed};
 use crate::core::global;
@@ -30,9 +30,8 @@ use crate::core::pow::Difficulty;
 use crate::peer::Peer;
 use crate::store::{PeerData, PeerStore, State};
 use crate::types::{
-	BlockHeaderResult, BlockResult, Capabilities, ChainAdapter, CompactBlockResult, Error,
-	NetAdapter, P2PConfig, PeerAddr, PeerInfo, ReasonForBan, TxHashSetRead, TxKernelResult,
-	MAX_PEER_ADDRS,
+	BlockHeaderResult, BlockResult, Capabilities, ChainAdapter, Error, NetAdapter, P2PConfig,
+	PeerAddr, PeerInfo, ReasonForBan, TxHashSetRead, TxKernelResult, MAX_PEER_ADDRS,
 };
 use chrono::prelude::*;
 use chrono::Duration;
@@ -43,15 +42,22 @@ pub struct Peers {
 	pub adapter: Arc<dyn ChainAdapter>,
 	store: PeerStore,
 	peers: RwLock<HashMap<PeerAddr, Arc<Peer>>>,
+	sync_state: Arc<SyncState>,
 	config: P2PConfig,
 }
 
 impl Peers {
-	pub fn new(store: PeerStore, adapter: Arc<dyn ChainAdapter>, config: P2PConfig) -> Peers {
+	pub fn new(
+		store: PeerStore,
+		adapter: Arc<dyn ChainAdapter>,
+		sync_state: Arc<SyncState>,
+		config: P2PConfig,
+	) -> Peers {
 		Peers {
 			adapter,
 			store,
 			config,
+			sync_state,
 			peers: RwLock::new(HashMap::new()),
 		}
 	}
@@ -263,7 +269,7 @@ impl Peers {
 		}
 
 		if let Some(peer) = self.get_connected_peer(peer_addr) {
-			debug!("Banning peer {}", peer_addr);
+			debug!("Banning peer {} for {:?}.", peer_addr, ban_reason);
 			// setting peer status will get it removed at the next clean_peer
 			match peer.send_ban_reason(ban_reason) {
 				Err(e) => error!("failed to send a ban reason to{}: {:?}", peer_addr, e),
@@ -334,6 +340,9 @@ impl Peers {
 	/// Broadcast a compact block to all our connected peers.
 	/// This is only used when initially broadcasting a newly mined block.
 	pub fn broadcast_compact_block(&self, b: &core::CompactBlock) {
+		if self.sync_state.is_syncing() {
+			return;
+		}
 		let count = self.broadcast("compact block", |p| p.send_compact_block(b));
 		debug!(
 			"broadcast_compact_block: {}, {} at {}, to {} peers, done.",
@@ -348,6 +357,9 @@ impl Peers {
 	/// A peer implementation may drop the broadcast request
 	/// if it knows the remote peer already has the header.
 	pub fn broadcast_header(&self, bh: &core::BlockHeader) {
+		if self.sync_state.is_syncing() {
+			return;
+		}
 		let count = self.broadcast("header", |p| p.send_header(bh));
 		debug!(
 			"broadcast_header: {}, {} at {}, to {} peers, done.",
@@ -362,6 +374,9 @@ impl Peers {
 	/// A peer implementation may drop the broadcast request
 	/// if it knows the remote peer already has the transaction.
 	pub fn broadcast_transaction(&self, tx: &core::Transaction) {
+		if self.sync_state.is_syncing() {
+			return;
+		}
 		let count = self.broadcast("transaction", |p| p.send_transaction(tx));
 		debug!(
 			"broadcast_transaction: {} to {} peers, done.",
@@ -595,8 +610,10 @@ impl ChainAdapter for Peers {
 		was_requested: bool,
 	) -> BlockResult {
 		let hash = b.hash();
+		let header = b.header.clone();
 		let res = self.adapter.block_received(b, peer_info, was_requested);
 		match res {
+			BlockResult::Accepted => self.broadcast_header(&header),
 			BlockResult::SoBadWillBan => {
 				debug!(
 					"Received a bad block {} from {}, the peer will be banned.",
@@ -609,15 +626,13 @@ impl ChainAdapter for Peers {
 		res
 	}
 
-	fn compact_block_received(
-		&self,
-		cb: core::CompactBlock,
-		peer_info: &PeerInfo,
-	) -> CompactBlockResult {
+	fn compact_block_received(&self, cb: core::CompactBlock, peer_info: &PeerInfo) -> BlockResult {
 		let hash = cb.hash();
+		let header = cb.header.clone();
 		let res = self.adapter.compact_block_received(cb, peer_info);
 		match res {
-			CompactBlockResult::SoBadWillBan => {
+			BlockResult::Accepted => self.broadcast_header(&header),
+			BlockResult::SoBadWillBan => {
 				// if the peer sent us a block that's intrinsically bad
 				// they are either mistaken or malevolent, both of which require a ban
 				debug!(
