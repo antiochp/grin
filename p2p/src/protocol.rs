@@ -164,7 +164,7 @@ impl MessageHandler for Protocol {
 
 				// we can't know at this level whether we requested the block or not,
 				// the boolean should be properly set in higher level adapter
-				adapter.block_received(b, &self.peer_info, false)?;
+				adapter.block_received(b, &self.peer_info)?;
 				Ok(None)
 			}
 

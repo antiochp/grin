@@ -367,7 +367,6 @@ impl Peer {
 	/// Sends a request for a specific block by hash
 	pub fn send_block_request(&self, h: Hash) -> Result<(), Error> {
 		debug!("Requesting block {} from peer {}.", h, self.info.addr);
-		self.tracking_adapter.push_req(h);
 		self.send(&h, msg::Type::GetBlock)
 	}
 
@@ -430,7 +429,6 @@ impl Peer {
 struct TrackingAdapter {
 	adapter: Arc<dyn NetAdapter>,
 	known: Arc<RwLock<Vec<Hash>>>,
-	requested: Arc<RwLock<Vec<Hash>>>,
 }
 
 impl TrackingAdapter {
@@ -438,15 +436,13 @@ impl TrackingAdapter {
 		TrackingAdapter {
 			adapter: adapter,
 			known: Arc::new(RwLock::new(Vec::with_capacity(MAX_TRACK_SIZE))),
-			requested: Arc::new(RwLock::new(Vec::with_capacity(MAX_TRACK_SIZE))),
 		}
 	}
 
+	// may become too slow, an ordered set (by timestamp for eviction) may
+	// end up being a better choice
 	fn has_recv(&self, hash: Hash) -> bool {
-		let known = self.known.read();
-		// may become too slow, an ordered set (by timestamp for eviction) may
-		// end up being a better choice
-		known.contains(&hash)
+		self.known.read().contains(&hash)
 	}
 
 	fn push_recv(&self, hash: Hash) {
@@ -456,23 +452,6 @@ impl TrackingAdapter {
 		}
 		if !known.contains(&hash) {
 			known.insert(0, hash);
-		}
-	}
-
-	fn has_req(&self, hash: Hash) -> bool {
-		let requested = self.requested.read();
-		// may become too slow, an ordered set (by timestamp for eviction) may
-		// end up being a better choice
-		requested.contains(&hash)
-	}
-
-	fn push_req(&self, hash: Hash) {
-		let mut requested = self.requested.write();
-		if requested.len() > MAX_TRACK_SIZE {
-			requested.truncate(MAX_TRACK_SIZE);
-		}
-		if !requested.contains(&hash) {
-			requested.insert(0, hash);
 		}
 	}
 }
@@ -514,15 +493,10 @@ impl ChainAdapter for TrackingAdapter {
 		self.adapter.transaction_received(tx, stem)
 	}
 
-	fn block_received(
-		&self,
-		b: core::Block,
-		peer_info: &PeerInfo,
-		_was_requested: bool,
-	) -> Result<bool, chain::Error> {
+	fn block_received(&self, b: core::Block, peer_info: &PeerInfo) -> Result<bool, chain::Error> {
 		let bh = b.hash();
 		self.push_recv(bh);
-		self.adapter.block_received(b, peer_info, self.has_req(bh))
+		self.adapter.block_received(b, peer_info)
 	}
 
 	fn compact_block_received(

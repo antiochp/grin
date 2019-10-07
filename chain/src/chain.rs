@@ -412,7 +412,7 @@ impl Chain {
 	/// Attempt to add new headers to the header chain (or fork).
 	/// This is only ever used during sync and is based on sync_head.
 	/// We update header_head here if our total work increases.
-	pub fn sync_block_headers(&self, headers: &[BlockHeader], opts: Options) -> Result<(), Error> {
+	pub fn sync_block_headers(&self, headers: &[BlockHeader]) -> Result<(), Error> {
 		let mut sync_pmmr = self.sync_pmmr.write();
 		let mut header_pmmr = self.header_pmmr.write();
 		let mut txhashset = self.txhashset.write();
@@ -420,7 +420,7 @@ impl Chain {
 		// Sync the chunk of block headers, updating sync_head as necessary.
 		{
 			let batch = self.store.batch()?;
-			let mut ctx = self.new_ctx(opts, batch, &mut sync_pmmr, &mut txhashset)?;
+			let mut ctx = self.new_ctx(Options::SYNC, batch, &mut sync_pmmr, &mut txhashset)?;
 			pipe::sync_block_headers(headers, &mut ctx)?;
 			ctx.batch.commit()?;
 		}
@@ -428,7 +428,7 @@ impl Chain {
 		// Now "process" the last block header, updating header_head to match sync_head.
 		if let Some(header) = headers.last() {
 			let batch = self.store.batch()?;
-			let mut ctx = self.new_ctx(opts, batch, &mut header_pmmr, &mut txhashset)?;
+			let mut ctx = self.new_ctx(Options::SYNC, batch, &mut header_pmmr, &mut txhashset)?;
 			pipe::process_block_header(header, &mut ctx)?;
 			ctx.batch.commit()?;
 		}

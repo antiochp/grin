@@ -525,12 +525,7 @@ pub trait ChainAdapter: Sync + Send {
 	/// block could be handled properly and is not deemed defective by the
 	/// chain. Returning false means the block will never be valid and
 	/// may result in the peer being banned.
-	fn block_received(
-		&self,
-		b: core::Block,
-		peer_info: &PeerInfo,
-		was_requested: bool,
-	) -> Result<bool, chain::Error>;
+	fn block_received(&self, b: core::Block, peer_info: &PeerInfo) -> Result<bool, chain::Error>;
 
 	fn compact_block_received(
 		&self,
