@@ -74,6 +74,19 @@ impl<T: PMMRable> PMMRHandle<T> {
 		let last_pos = backend.unpruned_size();
 		Ok(PMMRHandle { backend, last_pos })
 	}
+
+	/// Is the underlying PMMR empty?
+	pub fn is_empty(&self) -> bool {
+		self.last_pos == 0
+	}
+}
+
+impl PMMRHandle<TxKernel> {
+	/// Migrate an existing kernel PMMR to a new protocol version.
+	pub fn migrate_to_version(&mut self, version: ProtocolVersion) -> Result<(), Error> {
+		self.backend.migrate_to_version(version)?;
+		Ok(())
+	}
 }
 
 impl PMMRHandle<BlockHeader> {
@@ -154,58 +167,48 @@ impl TxHashSet {
 		// Initialize the bitmap accumulator from the current output PMMR.
 		let bitmap_accumulator = TxHashSet::bitmap_accumulator(&output_pmmr_h)?;
 
-		let mut maybe_kernel_handle: Option<PMMRHandle<TxKernel>> = None;
-		let versions = vec![ProtocolVersion(2), ProtocolVersion(1)];
-		for version in versions {
-			let handle = PMMRHandle::new(
-				&root_dir,
-				TXHASHSET_SUBDIR,
-				KERNEL_SUBDIR,
-				false, // not prunable
-				false, // variable size kernel data file
-				version,
-				None,
-			)?;
-			if handle.last_pos == 0 {
-				debug!(
-					"attempting to open (empty) kernel PMMR using {:?} - SUCCESS",
-					version
-				);
-				maybe_kernel_handle = Some(handle);
-				break;
-			}
-			let kernel: Option<TxKernel> = ReadonlyPMMR::at(&handle.backend, 1).get_data(1);
-			if let Some(kernel) = kernel {
-				if kernel.verify().is_ok() {
-					debug!(
-						"attempting to open kernel PMMR using {:?} - SUCCESS",
-						version
-					);
-					maybe_kernel_handle = Some(handle);
-					break;
-				} else {
-					debug!(
-						"attempting to open kernel PMMR using {:?} - FAIL (verify failed)",
-						version
-					);
-				}
+		let kernel_pmmr_h =
+			if let Ok(handle) = TxHashSet::try_kernel_pmmr(root_dir.clone(), ProtocolVersion(2)) {
+				handle
 			} else {
-				debug!(
-					"attempting to open kernel PMMR using {:?} - FAIL (read failed)",
-					version
-				);
-			}
-		}
-		if let Some(kernel_pmmr_h) = maybe_kernel_handle {
-			Ok(TxHashSet {
-				output_pmmr_h,
-				rproof_pmmr_h,
-				kernel_pmmr_h,
-				bitmap_accumulator,
-				commit_index,
-			})
+				let mut kernel_handle =
+					TxHashSet::try_kernel_pmmr(root_dir.clone(), ProtocolVersion(1))?;
+				kernel_handle.migrate_to_version(ProtocolVersion(2))?;
+				TxHashSet::try_kernel_pmmr(root_dir.clone(), ProtocolVersion(2))?
+			};
+
+		Ok(TxHashSet {
+			output_pmmr_h,
+			rproof_pmmr_h,
+			kernel_pmmr_h,
+			bitmap_accumulator,
+			commit_index,
+		})
+	}
+
+	fn try_kernel_pmmr(
+		root_dir: String,
+		version: ProtocolVersion,
+	) -> Result<PMMRHandle<TxKernel>, Error> {
+		let handle = PMMRHandle::new(
+			&root_dir,
+			TXHASHSET_SUBDIR,
+			KERNEL_SUBDIR,
+			false, // not prunable
+			false, // variable size kernel data file
+			version,
+			None,
+		)?;
+		if handle.is_empty() {
+			Ok(handle)
 		} else {
-			Err(ErrorKind::TxHashSetErr(format!("failed to open kernel PMMR")).into())
+			if let Some(kernel) = ReadonlyPMMR::at(&handle.backend, 1).get_data(1) {
+				kernel.verify()?;
+				debug!("try_kernel_pmmr: {:?} [SUCCESS]", version);
+				Ok(handle)
+			} else {
+				Err(ErrorKind::TxHashSetErr("failed to read kernel data".to_owned()).into())
+			}
 		}
 	}
 

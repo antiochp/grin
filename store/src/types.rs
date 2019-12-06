@@ -159,7 +159,12 @@ where
 	pub fn save_prune(&mut self, prune_pos: &[u64]) -> io::Result<()> {
 		// Need to convert from 1-index to 0-index (don't ask).
 		let prune_idx: Vec<_> = prune_pos.into_iter().map(|x| x - 1).collect();
-		self.file.save_prune(prune_idx.as_slice())
+		self.file
+			.save_prune(prune_idx.as_slice(), self.file.version)
+	}
+
+	pub fn migrate_to_version(&mut self, version: ProtocolVersion) -> io::Result<()> {
+		self.file.save_prune(&[], version)
 	}
 }
 
@@ -220,7 +225,7 @@ where
 			buffer_start_pos_bak: 0,
 			_marker: marker::PhantomData,
 		};
-		aof.init()?;
+		aof.init(version)?;
 
 		// (Re)build the size file if inconsistent with the data file.
 		// This will occur during "fast sync" as we do not sync the size_file
@@ -233,7 +238,7 @@ where
 
 				// (Re)init the entire file as we just rebuilt the size_file
 				// and things may have changed.
-				aof.init()?;
+				aof.init(version)?;
 			}
 		}
 
@@ -242,9 +247,11 @@ where
 
 	/// (Re)init an underlying file and its associated memmap.
 	/// Taking care to initialize the mmap_offset_cache for each element.
-	pub fn init(&mut self) -> io::Result<()> {
+	fn init(&mut self, version: ProtocolVersion) -> io::Result<()> {
+		self.version = version;
+
 		if let SizeInfo::VariableSize(ref mut size_file) = self.size_info {
-			size_file.init()?;
+			size_file.init(version)?;
 		}
 
 		self.file = Some(
@@ -481,7 +488,11 @@ where
 
 	/// Saves a copy of the current file content, skipping data at the provided
 	/// prune positions. prune_pos must be ordered.
-	pub fn save_prune(&mut self, prune_pos: &[u64]) -> io::Result<()> {
+	pub fn save_prune(
+		&mut self,
+		prune_pos: &[u64],
+		new_version: ProtocolVersion,
+	) -> io::Result<()> {
 		let tmp_path = self.path.with_extension("tmp");
 
 		// Scope the reader and writer to within the block so we can safely replace files later on.
@@ -491,7 +502,7 @@ where
 			let mut streaming_reader = StreamingReader::new(&mut buf_reader, self.version);
 
 			let mut buf_writer = BufWriter::new(File::create(&tmp_path)?);
-			let mut bin_writer = BinWriter::new(&mut buf_writer, self.version);
+			let mut bin_writer = BinWriter::new(&mut buf_writer, new_version);
 
 			let mut current_pos = 0;
 			let mut prune_pos = prune_pos;
@@ -520,7 +531,7 @@ where
 		}
 
 		// Now (re)init the file and associated size_file so everything is consistent.
-		self.init()?;
+		self.init(new_version)?;
 
 		Ok(())
 	}

@@ -343,6 +343,11 @@ impl<T: PMMRable> PMMRBackend<T> {
 		self.leaf_set.discard();
 	}
 
+	pub fn migrate_to_version(&mut self, version: ProtocolVersion) -> io::Result<()> {
+		self.data_file.migrate_to_version(version)?;
+		Ok(())
+	}
+
 	/// Takes the leaf_set at a given cutoff_pos and generates an updated
 	/// prune_list. Saves the updated prune_list to disk, compacts the hash
 	/// and data files based on the prune_list and saves both to disk.
