@@ -343,6 +343,7 @@ impl<T: PMMRable> PMMRBackend<T> {
 		self.leaf_set.discard();
 	}
 
+	/// Migrate the backend data file to the specified version.
 	pub fn migrate_to_version(&mut self, version: ProtocolVersion) -> io::Result<()> {
 		self.data_file.migrate_to_version(version)?;
 		Ok(())

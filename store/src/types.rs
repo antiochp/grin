@@ -163,6 +163,7 @@ where
 			.save_prune(prune_idx.as_slice(), self.file.version)
 	}
 
+	/// Migrate the backend data file to the specified version.
 	pub fn migrate_to_version(&mut self, version: ProtocolVersion) -> io::Result<()> {
 		self.file.save_prune(&[], version)
 	}
