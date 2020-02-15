@@ -33,7 +33,6 @@ const BLOCK_HEADER_PREFIX: u8 = b'h';
 const BLOCK_PREFIX: u8 = b'b';
 const HEAD_PREFIX: u8 = b'H';
 const TAIL_PREFIX: u8 = b'T';
-const OUTPUT_POS_PREFIX: u8 = b'p';
 const OUTPUT_POS_VEC_PREFIX: u8 = b'o';
 const BLOCK_INPUT_BITMAP_PREFIX: u8 = b'B';
 const BLOCK_SUMS_PREFIX: u8 = b'M';
@@ -175,13 +174,8 @@ impl<'a> Batch<'a> {
 		self.db.exists(&to_key(BLOCK_PREFIX, &mut h.to_vec()))
 	}
 
-	/// Save the block and the associated input bitmap.
-	/// Note: the block header is not saved to the db here, assumes this has already been done.
+	/// Save the block to the db by hash.
 	pub fn save_block(&self, b: &Block) -> Result<(), Error> {
-		// Build the "input bitmap" for this new block and store it in the db.
-		// self.build_and_store_block_input_bitmap(&b)?;
-
-		// Save the block itself to the db.
 		self.db
 			.put_ser(&to_key(BLOCK_PREFIX, &mut b.hash().to_vec())[..], b)?;
 
@@ -277,14 +271,6 @@ impl<'a> Batch<'a> {
 			|| format!("BLOCK HEADER: {}", h),
 		)
 	}
-
-	// /// Save the input bitmap for the block.
-	// fn save_block_input_bitmap(&self, bh: &Hash, bm: &Bitmap) -> Result<(), Error> {
-	// 	self.db.put(
-	// 		&to_key(BLOCK_INPUT_BITMAP_PREFIX, &mut bh.to_vec())[..],
-	// 		&bm.serialize(),
-	// 	)
-	// }
 
 	/// Delete the block input bitmap.
 	fn delete_block_input_bitmap(&self, bh: &Hash) -> Result<(), Error> {
