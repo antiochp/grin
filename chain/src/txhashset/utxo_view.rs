@@ -18,10 +18,9 @@ use crate::core::core::hash::{Hash, Hashed};
 use crate::core::core::pmmr::{self, ReadonlyPMMR};
 use crate::core::core::{Block, BlockHeader, Input, Output, Transaction};
 use crate::core::global;
-use crate::core::ser::PMMRIndexHashable;
 use crate::error::{Error, ErrorKind};
 use crate::store::Batch;
-use crate::util::secp::pedersen::RangeProof;
+use crate::util::secp::pedersen::{Commitment, RangeProof};
 use grin_store::pmmr::PMMRBackend;
 
 /// Readonly view of the UTXO set (based on output MMR).
@@ -73,30 +72,55 @@ impl<'a> UTXOView<'a> {
 		Ok(())
 	}
 
+	fn get_output_pos(&self, commit: &Commitment, batch: &Batch<'_>) -> Result<u64, Error> {
+		batch
+			.get_output_pos_height(&commit)?
+			.into_iter()
+			.find_map(|(pos, _)| {
+				// TODO and_then or some other kind of cleanup here
+				if let Some(output) = self.output_pmmr.get_data(pos) {
+					if output.commitment() == *commit {
+						Some(pos)
+					} else {
+						None
+					}
+				} else {
+					None
+				}
+			})
+			.ok_or(ErrorKind::OutputNotFound.into())
+	}
+
 	// Input is valid if it is spending an (unspent) output
 	// that currently exists in the output MMR.
 	// Compare the hash in the output MMR at the expected pos.
 	fn validate_input(&self, input: &Input, batch: &Batch<'_>) -> Result<(), Error> {
-		if let Ok(pos) = batch.get_output_pos(&input.commitment()) {
-			if let Some(hash) = self.output_pmmr.get_hash(pos) {
-				if hash == input.hash_with_index(pos - 1) {
-					return Ok(());
-				}
-			}
+		if let Ok(pos) = self.get_output_pos(&input.commitment(), batch) {
+			// No longer needed as get_output_pos checks the output commitment matches
+			// if let Some(hash) = self.output_pmmr.get_hash(pos) {
+			// 	if hash == input.hash_with_index(pos - 1) {
+			// 		return Ok(());
+			// 	}
+			// }
+			Ok(())
+		} else {
+			Err(ErrorKind::AlreadySpent(input.commitment()).into())
 		}
-		Err(ErrorKind::AlreadySpent(input.commitment()).into())
 	}
 
 	// Output is valid if it would not result in a duplicate commitment in the output MMR.
 	fn validate_output(&self, output: &Output, batch: &Batch<'_>) -> Result<(), Error> {
-		if let Ok(pos) = batch.get_output_pos(&output.commitment()) {
-			if let Some(out_mmr) = self.output_pmmr.get_data(pos) {
-				if out_mmr.commitment() == output.commitment() {
-					return Err(ErrorKind::DuplicateCommitment(output.commitment()).into());
-				}
-			}
+		if let Ok(pos) = self.get_output_pos(&output.commitment(), batch) {
+			// No longer needed as get_output_pos checks the output commitment matches
+			// if let Some(out_mmr) = self.output_pmmr.get_data(pos) {
+			// 	if out_mmr.commitment() == output.commitment() {
+			// 		return Err(ErrorKind::DuplicateCommitment(output.commitment()).into());
+			// 	}
+			// }
+			Err(ErrorKind::DuplicateCommitment(output.commitment()).into())
+		} else {
+			Ok(())
 		}
-		Ok(())
 	}
 
 	/// Retrieves an unspent output using its PMMR position
@@ -123,7 +147,7 @@ impl<'a> UTXOView<'a> {
 		let pos = inputs
 			.iter()
 			.filter(|x| x.is_coinbase())
-			.filter_map(|x| batch.get_output_pos(&x.commitment()).ok())
+			.filter_map(|x| self.get_output_pos(&x.commitment(), batch).ok())
 			.max()
 			.unwrap_or(0);
 

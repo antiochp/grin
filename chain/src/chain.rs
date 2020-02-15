@@ -199,6 +199,13 @@ impl Chain {
 			&mut txhashset,
 		)?;
 
+		// TODO - Initialize this on startup. Not 100% correct as it ignores old outputs.
+		{
+			let batch = store.batch()?;
+			txhashset.init_output_pos_index(&header_pmmr, &batch)?;
+			batch.commit()?;
+		}
+
 		let chain = Chain {
 			db_root,
 			store,

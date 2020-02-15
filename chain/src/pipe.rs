@@ -121,44 +121,45 @@ pub fn process_block(b: &Block, ctx: &mut BlockContext<'_>) -> Result<Option<Tip
 	let ref mut header_pmmr = &mut ctx.header_pmmr;
 	let ref mut txhashset = &mut ctx.txhashset;
 	let ref mut batch = &mut ctx.batch;
-	let block_sums = txhashset::extending(header_pmmr, txhashset, batch, |ext, batch| {
-		rewind_and_apply_fork(&prev, ext, batch)?;
+	let (block_sums, spent_pos) =
+		txhashset::extending(header_pmmr, txhashset, batch, |ext, batch| {
+			rewind_and_apply_fork(&prev, ext, batch)?;
 
-		// Check any coinbase being spent have matured sufficiently.
-		// This needs to be done within the context of a potentially
-		// rewound txhashset extension to reflect chain state prior
-		// to applying the new block.
-		verify_coinbase_maturity(b, ext, batch)?;
+			// Check any coinbase being spent have matured sufficiently.
+			// This needs to be done within the context of a potentially
+			// rewound txhashset extension to reflect chain state prior
+			// to applying the new block.
+			verify_coinbase_maturity(b, ext, batch)?;
 
-		// Validate the block against the UTXO set.
-		validate_utxo(b, ext, batch)?;
+			// Validate the block against the UTXO set.
+			validate_utxo(b, ext, batch)?;
 
-		// Using block_sums (utxo_sum, kernel_sum) for the previous block from the db
-		// we can verify_kernel_sums across the full UTXO sum and full kernel sum
-		// accounting for inputs/outputs/kernels in this new block.
-		// We know there are no double-spends etc. if this verifies successfully.
-		// Remember to save these to the db later on (regardless of extension rollback)
-		let block_sums = verify_block_sums(b, batch)?;
+			// Using block_sums (utxo_sum, kernel_sum) for the previous block from the db
+			// we can verify_kernel_sums across the full UTXO sum and full kernel sum
+			// accounting for inputs/outputs/kernels in this new block.
+			// We know there are no double-spends etc. if this verifies successfully.
+			// Remember to save these to the db later on (regardless of extension rollback)
+			let block_sums = verify_block_sums(b, batch)?;
 
-		// Apply the block to the txhashset state.
-		// Validate the txhashset roots and sizes against the block header.
-		// Block is invalid if there are any discrepencies.
-		apply_block_to_txhashset(b, ext, batch)?;
+			// Apply the block to the txhashset state.
+			// Validate the txhashset roots and sizes against the block header.
+			// Block is invalid if there are any discrepencies.
+			let spent_pos = apply_block_to_txhashset(b, ext, batch)?;
 
-		// If applying this block does not increase the work on the chain then
-		// we know we have not yet updated the chain to produce a new chain head.
-		let head = batch.head()?;
-		if !has_more_work(&b.header, &head) {
-			ext.extension.force_rollback();
-		}
+			// If applying this block does not increase the work on the chain then
+			// we know we have not yet updated the chain to produce a new chain head.
+			let head = batch.head()?;
+			if !has_more_work(&b.header, &head) {
+				ext.extension.force_rollback();
+			}
 
-		Ok(block_sums)
-	})?;
+			Ok((block_sums, spent_pos))
+		})?;
 
 	// Add the validated block to the db along with the corresponding block_sums.
 	// We do this even if we have not increased the total cumulative work
 	// so we can maintain multiple (in progress) forks.
-	add_block(b, &block_sums, &ctx.batch)?;
+	add_block(b, block_sums, spent_pos, &ctx.batch)?;
 
 	// If we have no "tail" then set it now.
 	if ctx.batch.tail().is_err() {
@@ -429,20 +430,26 @@ fn apply_block_to_txhashset(
 	block: &Block,
 	ext: &mut txhashset::ExtensionPair<'_>,
 	batch: &store::Batch<'_>,
-) -> Result<(), Error> {
-	ext.extension.apply_block(block, batch)?;
+) -> Result<Vec<u64>, Error> {
+	let spent_pos = ext.extension.apply_block(block, batch)?;
 	ext.extension.validate_roots(&block.header)?;
 	ext.extension.validate_sizes(&block.header)?;
-	Ok(())
+	Ok(spent_pos)
 }
 
 /// Officially adds the block to our chain.
 /// Header must be added separately (assume this has been done previously).
-fn add_block(b: &Block, block_sums: &BlockSums, batch: &store::Batch<'_>) -> Result<(), Error> {
+fn add_block(
+	b: &Block,
+	block_sums: BlockSums,
+	spent_pos: Vec<u64>,
+	batch: &store::Batch<'_>,
+) -> Result<(), Error> {
 	batch
 		.save_block(b)
 		.map_err(|e| ErrorKind::StoreErr(e, "pipe save block".to_owned()))?;
-	batch.save_block_sums(&b.hash(), block_sums)?;
+	batch.save_block_input_bitmap(&b.hash(), spent_pos)?;
+	batch.save_block_sums(&b.hash(), &block_sums)?;
 	Ok(())
 }
 

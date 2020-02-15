@@ -225,22 +225,27 @@ impl TxHashSet {
 	/// Then we check the entry in the output MMR and confirm the hash matches.
 	pub fn is_unspent(&self, output_id: &OutputIdentifier) -> Result<OutputMMRPosition, Error> {
 		match self.commit_index.get_output_pos_height(&output_id.commit) {
-			Ok((pos, block_height)) => {
+			Ok(pos_vec) => {
 				let output_pmmr: ReadonlyPMMR<'_, Output, _> =
 					ReadonlyPMMR::at(&self.output_pmmr_h.backend, self.output_pmmr_h.last_pos);
-				if let Some(hash) = output_pmmr.get_hash(pos) {
-					if hash == output_id.hash_with_index(pos - 1) {
-						Ok(OutputMMRPosition {
-							output_mmr_hash: hash,
-							position: pos,
-							height: block_height,
-						})
+				let res = pos_vec.into_iter().find_map(|(pos, height)| {
+					// TODO - use get_data here, not get_hash and compare the commitment directly
+					// TODO - and_then or some other cleanup
+					if let Some(hash) = output_pmmr.get_hash(pos) {
+						if hash == output_id.hash_with_index(pos - 1) {
+							Some(OutputMMRPosition {
+								output_mmr_hash: hash,
+								position: pos,
+								height: height,
+							})
+						} else {
+							None
+						}
 					} else {
-						Err(ErrorKind::TxHashSetErr("txhashset hash mismatch".to_string()).into())
+						None
 					}
-				} else {
-					Err(ErrorKind::OutputNotFound.into())
-				}
+				});
+				res.ok_or(ErrorKind::OutputNotFound.into())
 			}
 			Err(grin_store::Error::NotFoundErr(_)) => Err(ErrorKind::OutputNotFound.into()),
 			Err(e) => Err(ErrorKind::StoreErr(e, "txhashset unspent check".to_string()).into()),
@@ -344,14 +349,30 @@ impl TxHashSet {
 		}
 	}
 
-	/// Return Commit's MMR position
 	pub fn get_output_pos(&self, commit: &Commitment) -> Result<u64, Error> {
-		Ok(self.commit_index.get_output_pos(&commit)?)
+		let output_pmmr =
+			ReadonlyPMMR::at(&self.output_pmmr_h.backend, self.output_pmmr_h.last_pos);
+		let vec_pos = self.commit_index.get_output_pos_height(&commit)?;
+		vec_pos
+			.into_iter()
+			.find_map(|(pos, _)| {
+				// TODO and_then or some other kind of cleanup here
+				if let Some(output) = output_pmmr.get_data(pos) {
+					if output.commitment() == *commit {
+						Some(pos)
+					} else {
+						None
+					}
+				} else {
+					None
+				}
+			})
+			.ok_or(ErrorKind::OutputNotFound.into())
 	}
 
 	/// build a new merkle proof for the given position.
 	pub fn merkle_proof(&mut self, commit: Commitment) -> Result<MerkleProof, Error> {
-		let pos = self.commit_index.get_output_pos(&commit)?;
+		let pos = self.get_output_pos(&commit)?;
 		PMMR::at(&mut self.output_pmmr_h.backend, self.output_pmmr_h.last_pos)
 			.merkle_proof(pos)
 			.map_err(|_| ErrorKind::MerkleProof.into())
@@ -391,7 +412,7 @@ impl TxHashSet {
 	pub fn init_output_pos_index(
 		&self,
 		header_pmmr: &PMMRHandle<BlockHeader>,
-		batch: &mut Batch<'_>,
+		batch: &Batch<'_>,
 	) -> Result<(), Error> {
 		let now = Instant::now();
 
@@ -425,7 +446,7 @@ impl TxHashSet {
 			}
 		}
 		debug!(
-			"init_height_pos_index: {} UTXOs, took {}s",
+			"init_output_pos_index: {} UTXOs, took {}s",
 			total_outputs,
 			now.elapsed().as_secs(),
 		);
@@ -433,29 +454,32 @@ impl TxHashSet {
 	}
 
 	fn compact_height_pos_index(&self, batch: &Batch<'_>) -> Result<(), Error> {
-		let now = Instant::now();
-		let output_pmmr =
-			ReadonlyPMMR::at(&self.output_pmmr_h.backend, self.output_pmmr_h.last_pos);
-		let last_pos = output_pmmr.unpruned_size();
-
-		let deleted = batch
-			.output_pos_iter()?
-			.filter(|(_, (pos, _))| {
-				// Note we use get_from_file() here as we want to ensure we have an entry
-				// in the index for *every* output still in the file, not just the "unspent"
-				// outputs. This is because we need to support rewind to handle fork/reorg.
-				// Rewind may "unspend" recently spent, but not yet pruned outputs, and the
-				// index must be consistent in this situation.
-				*pos <= last_pos && output_pmmr.get_from_file(*pos).is_none()
-			})
-			.map(|(key, _)| batch.delete(&key))
-			.count();
-		debug!(
-			"compact_output_pos_index: deleted {} entries from the index, took {}s",
-			deleted,
-			now.elapsed().as_secs(),
-		);
+		// TODO - Implement this.
 		Ok(())
+
+		// let now = Instant::now();
+		// let output_pmmr =
+		// 	ReadonlyPMMR::at(&self.output_pmmr_h.backend, self.output_pmmr_h.last_pos);
+		// let last_pos = output_pmmr.unpruned_size();
+		//
+		// let deleted = batch
+		// 	.output_pos_iter()?
+		// 	.filter(|(_, (pos, _))| {
+		// 		// Note we use get_from_file() here as we want to ensure we have an entry
+		// 		// in the index for *every* output still in the file, not just the "unspent"
+		// 		// outputs. This is because we need to support rewind to handle fork/reorg.
+		// 		// Rewind may "unspend" recently spent, but not yet pruned outputs, and the
+		// 		// index must be consistent in this situation.
+		// 		*pos <= last_pos && output_pmmr.get_from_file(*pos).is_none()
+		// 	})
+		// 	.map(|(key, _)| batch.delete(&key))
+		// 	.count();
+		// debug!(
+		// 	"compact_output_pos_index: deleted {} entries from the index, took {}s",
+		// 	deleted,
+		// 	now.elapsed().as_secs(),
+		// );
+		// Ok(())
 	}
 }
 
@@ -923,7 +947,8 @@ impl<'a> Extension<'a> {
 	}
 
 	/// Apply a new block to the current txhashet extension (output, rangeproof, kernel MMRs).
-	pub fn apply_block(&mut self, b: &Block, batch: &Batch<'_>) -> Result<(), Error> {
+	pub fn apply_block(&mut self, b: &Block, batch: &Batch<'_>) -> Result<Vec<u64>, Error> {
+		let mut spent_pos = vec![];
 		let mut affected_pos = vec![];
 
 		for out in b.outputs() {
@@ -934,6 +959,7 @@ impl<'a> Extension<'a> {
 
 		for input in b.inputs() {
 			let pos = self.apply_input(input, batch)?;
+			spent_pos.push(pos);
 			affected_pos.push(pos);
 		}
 
@@ -947,7 +973,7 @@ impl<'a> Extension<'a> {
 		// Update the head of the extension to reflect the block we just applied.
 		self.head = Tip::from_header(&b.header);
 
-		Ok(())
+		Ok(spent_pos)
 	}
 
 	fn apply_to_bitmap_accumulator(&mut self, output_pos: &[u64]) -> Result<(), Error> {
@@ -969,18 +995,37 @@ impl<'a> Extension<'a> {
 		)
 	}
 
+	fn get_output_pos(&self, commit: &Commitment, batch: &Batch<'_>) -> Result<u64, Error> {
+		batch
+			.get_output_pos_height(&commit)?
+			.into_iter()
+			.find_map(|(pos, _)| {
+				// TODO and_then or some other kind of cleanup here
+				if let Some(output) = self.output_pmmr.get_data(pos) {
+					if output.commitment() == *commit {
+						Some(pos)
+					} else {
+						None
+					}
+				} else {
+					None
+				}
+			})
+			.ok_or(ErrorKind::OutputNotFound.into())
+	}
+
 	fn apply_input(&mut self, input: &Input, batch: &Batch<'_>) -> Result<u64, Error> {
 		let commit = input.commitment();
-		let pos_res = batch.get_output_pos(&commit);
+		let pos_res = self.get_output_pos(&commit, batch);
 		if let Ok(pos) = pos_res {
-			// First check this input corresponds to an existing entry in the output MMR.
-			if let Some(hash) = self.output_pmmr.get_hash(pos) {
-				if hash != input.hash_with_index(pos - 1) {
-					return Err(
-						ErrorKind::TxHashSetErr("output pmmr hash mismatch".to_string()).into(),
-					);
-				}
-			}
+			// // First check this input corresponds to an existing entry in the output MMR.
+			// if let Some(hash) = self.output_pmmr.get_hash(pos) {
+			// 	if hash != input.hash_with_index(pos - 1) {
+			// 		return Err(
+			// 			ErrorKind::TxHashSetErr("output pmmr hash mismatch".to_string()).into(),
+			// 		);
+			// 	}
+			// }
 
 			// Now prune the output_pmmr, rproof_pmmr and their storage.
 			// Input is not valid if we cannot prune successfully (to spend an unspent
@@ -1003,12 +1048,15 @@ impl<'a> Extension<'a> {
 	fn apply_output(&mut self, out: &Output, batch: &Batch<'_>) -> Result<u64, Error> {
 		let commit = out.commitment();
 
-		if let Ok(pos) = batch.get_output_pos(&commit) {
-			if let Some(out_mmr) = self.output_pmmr.get_data(pos) {
-				if out_mmr.commitment() == commit {
-					return Err(ErrorKind::DuplicateCommitment(commit).into());
-				}
-			}
+		if let Ok(pos) = self.get_output_pos(&commit, batch) {
+			// Not necessary as get_output_pos() checks the output commitment matches
+			// if let Some(out_mmr) = self.output_pmmr.get_data(pos) {
+			// 	if out_mmr.commitment() == commit {
+			// 		return Err(ErrorKind::DuplicateCommitment(commit).into());
+			// 	}
+			// }
+
+			return Err(ErrorKind::DuplicateCommitment(commit).into());
 		}
 		// push the new output to the MMR.
 		let output_pos = self
@@ -1060,7 +1108,7 @@ impl<'a> Extension<'a> {
 	) -> Result<MerkleProof, Error> {
 		debug!("txhashset: merkle_proof: output: {:?}", output.commit,);
 		// then calculate the Merkle Proof based on the known pos
-		let pos = batch.get_output_pos(&output.commit)?;
+		let pos = self.get_output_pos(&output.commit, batch)?;
 		let merkle_proof = self
 			.output_pmmr
 			.merkle_proof(pos)

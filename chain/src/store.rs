@@ -24,6 +24,7 @@ use crate::util::secp::pedersen::Commitment;
 use croaring::Bitmap;
 use grin_store as store;
 use grin_store::{option_to_not_found, to_key, Error, SerIterator};
+use std::convert::TryInto;
 use std::sync::Arc;
 
 const STORE_SUBPATH: &str = "chain";
@@ -33,6 +34,7 @@ const BLOCK_PREFIX: u8 = b'b';
 const HEAD_PREFIX: u8 = b'H';
 const TAIL_PREFIX: u8 = b'T';
 const OUTPUT_POS_PREFIX: u8 = b'p';
+const OUTPUT_POS_VEC_PREFIX: u8 = b'o';
 const BLOCK_INPUT_BITMAP_PREFIX: u8 = b'B';
 const BLOCK_SUMS_PREFIX: u8 = b'M';
 
@@ -111,18 +113,13 @@ impl ChainStore {
 		)
 	}
 
-	/// Get PMMR pos for the given output commitment.
-	pub fn get_output_pos(&self, commit: &Commitment) -> Result<u64, Error> {
-		self.get_output_pos_height(commit).map(|(pos, _)| pos)
-	}
-
-	/// Get PMMR pos and block height for the given output commitment.
-	pub fn get_output_pos_height(&self, commit: &Commitment) -> Result<(u64, u64), Error> {
-		option_to_not_found(
-			self.db
-				.get_ser(&to_key(OUTPUT_POS_PREFIX, &mut commit.as_ref().to_vec())),
-			|| format!("Output position for: {:?}", commit),
-		)
+	pub fn get_output_pos_height(&self, commit: &Commitment) -> Result<Vec<(u64, u64)>, Error> {
+		self.db
+			.get_ser(&to_key(
+				OUTPUT_POS_VEC_PREFIX,
+				&mut commit.as_ref().to_vec(),
+			))
+			.map(|x| x.unwrap_or(vec![]))
 	}
 
 	/// Builds a new batch to be used with this store.
@@ -182,7 +179,7 @@ impl<'a> Batch<'a> {
 	/// Note: the block header is not saved to the db here, assumes this has already been done.
 	pub fn save_block(&self, b: &Block) -> Result<(), Error> {
 		// Build the "input bitmap" for this new block and store it in the db.
-		self.build_and_store_block_input_bitmap(&b)?;
+		// self.build_and_store_block_input_bitmap(&b)?;
 
 		// Save the block itself to the db.
 		self.db
@@ -241,30 +238,30 @@ impl<'a> Batch<'a> {
 		pos: u64,
 		height: u64,
 	) -> Result<(), Error> {
+		let value = (pos, height);
+		let mut entry = self.get_output_pos_height(commit)?;
+		if let Err(idx) = entry.binary_search(&value) {
+			entry.insert(idx, value);
+		}
 		self.db.put_ser(
-			&to_key(OUTPUT_POS_PREFIX, &mut commit.as_ref().to_vec())[..],
-			&(pos, height),
+			&to_key(OUTPUT_POS_VEC_PREFIX, &mut commit.as_ref().to_vec())[..],
+			&entry,
 		)
 	}
 
 	/// Iterator over the output_pos index.
-	pub fn output_pos_iter(&self) -> Result<SerIterator<(u64, u64)>, Error> {
-		let key = to_key(OUTPUT_POS_PREFIX, &mut "".to_string().into_bytes());
+	pub fn output_pos_iter(&self) -> Result<SerIterator<Vec<(u64, u64)>>, Error> {
+		let key = to_key(OUTPUT_POS_VEC_PREFIX, &mut "".to_string().into_bytes());
 		self.db.iter(&key)
 	}
 
-	/// Get output_pos from index.
-	pub fn get_output_pos(&self, commit: &Commitment) -> Result<u64, Error> {
-		self.get_output_pos_height(commit).map(|(pos, _)| pos)
-	}
-
-	/// Get output_pos and block height from index.
-	pub fn get_output_pos_height(&self, commit: &Commitment) -> Result<(u64, u64), Error> {
-		option_to_not_found(
-			self.db
-				.get_ser(&to_key(OUTPUT_POS_PREFIX, &mut commit.as_ref().to_vec())),
-			|| format!("Output position for commit: {:?}", commit),
-		)
+	pub fn get_output_pos_height(&self, commit: &Commitment) -> Result<Vec<(u64, u64)>, Error> {
+		self.db
+			.get_ser(&to_key(
+				OUTPUT_POS_VEC_PREFIX,
+				&mut commit.as_ref().to_vec(),
+			))
+			.map(|x| x.unwrap_or(vec![]))
 	}
 
 	/// Get the previous header.
@@ -281,13 +278,13 @@ impl<'a> Batch<'a> {
 		)
 	}
 
-	/// Save the input bitmap for the block.
-	fn save_block_input_bitmap(&self, bh: &Hash, bm: &Bitmap) -> Result<(), Error> {
-		self.db.put(
-			&to_key(BLOCK_INPUT_BITMAP_PREFIX, &mut bh.to_vec())[..],
-			&bm.serialize(),
-		)
-	}
+	// /// Save the input bitmap for the block.
+	// fn save_block_input_bitmap(&self, bh: &Hash, bm: &Bitmap) -> Result<(), Error> {
+	// 	self.db.put(
+	// 		&to_key(BLOCK_INPUT_BITMAP_PREFIX, &mut bh.to_vec())[..],
+	// 		&bm.serialize(),
+	// 	)
+	// }
 
 	/// Delete the block input bitmap.
 	fn delete_block_input_bitmap(&self, bh: &Hash) -> Result<(), Error> {
@@ -315,25 +312,20 @@ impl<'a> Batch<'a> {
 	}
 
 	/// Build the input bitmap for the given block.
-	fn build_block_input_bitmap(&self, block: &Block) -> Result<Bitmap, Error> {
-		let bitmap = block
-			.inputs()
-			.iter()
-			.filter_map(|x| self.get_output_pos(&x.commitment()).ok())
-			.map(|x| x as u32)
-			.collect();
-		Ok(bitmap)
+	fn build_block_input_bitmap(&self, spent_pos: Vec<u64>) -> Bitmap {
+		spent_pos
+			.into_iter()
+			.filter_map(|x| x.try_into().ok())
+			.collect()
 	}
 
 	/// Build and store the input bitmap for the given block.
-	fn build_and_store_block_input_bitmap(&self, block: &Block) -> Result<Bitmap, Error> {
-		// Build the bitmap.
-		let bitmap = self.build_block_input_bitmap(block)?;
-
-		// Save the bitmap to the db (via the batch).
-		self.save_block_input_bitmap(&block.hash(), &bitmap)?;
-
-		Ok(bitmap)
+	pub fn save_block_input_bitmap(&self, bh: &Hash, spent_pos: Vec<u64>) -> Result<(), Error> {
+		let bitmap = self.build_block_input_bitmap(spent_pos);
+		self.db.put(
+			&to_key(BLOCK_INPUT_BITMAP_PREFIX, &mut bh.to_vec())[..],
+			&bitmap.serialize(),
+		)
 	}
 
 	/// Get the block input bitmap from the db or build the bitmap from
@@ -345,13 +337,7 @@ impl<'a> Batch<'a> {
 		{
 			Ok(Bitmap::deserialize(&bytes))
 		} else {
-			match self.get_block(bh) {
-				Ok(block) => {
-					let bitmap = self.build_and_store_block_input_bitmap(&block)?;
-					Ok(bitmap)
-				}
-				Err(e) => Err(e),
-			}
+			panic!("this needs cleaning up, its a not found error here I think")
 		}
 	}
 
