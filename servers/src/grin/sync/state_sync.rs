@@ -163,49 +163,38 @@ impl StateSync {
 	fn request_state(&self, header_head: &chain::Tip) -> Result<Arc<Peer>, p2p::Error> {
 		let threshold = global::state_sync_threshold() as u64;
 		let archive_interval = global::txhashset_archive_interval();
-		let mut txhashset_height = header_head.height.saturating_sub(threshold);
-		txhashset_height = txhashset_height.saturating_sub(txhashset_height % archive_interval);
 
-		if let Some(peer) = self.peers.most_work_peer() {
-			// ask for txhashset at state_sync_threshold
-			let mut txhashset_head = self
-				.chain
-				.get_block_header(&header_head.prev_block_h)
-				.map_err(|e| {
-					error!(
-						"chain error during getting a block header {}: {:?}",
-						&header_head.prev_block_h, e
-					);
-					p2p::Error::Internal
-				})?;
-			while txhashset_head.height > txhashset_height {
-				txhashset_head = self
-					.chain
-					.get_previous_header(&txhashset_head)
-					.map_err(|e| {
-						error!(
-							"chain error during getting a previous block header {}: {:?}",
-							txhashset_head.hash(),
-							e
-						);
-						p2p::Error::Internal
-					})?;
-			}
-			let bhash = txhashset_head.hash();
+		// Find the height based on the sync_threshold, rounding down to nearest archive_interval
+		let txhashset_height =
+			header_head.height.saturating_sub(threshold) / archive_interval * archive_interval;
+
+		// Find the header at the height we wish to sync the txhashset at
+		let txhashset_header = self.chain.get_header_by_height(txhashset_height)?;
+
+		// Find a connected outbound peer with sufficient total_difficulty to sync from
+		let peer = self
+			.peers
+			.outgoing_connected_peers()
+			.into_iter()
+			.find(|peer| peer.info.total_difficulty() >= txhashset_header.total_difficulty());
+
+		if let Some(peer) = peer {
+			let bhash = txhashset_header.hash();
 			debug!(
 				"state_sync: before txhashset request, header head: {} / {}, txhashset_head: {} / {}",
 				header_head.height,
 				header_head.last_block_h,
-				txhashset_head.height,
+				txhashset_header.height,
 				bhash
 			);
-			if let Err(e) = peer.send_txhashset_request(txhashset_head.height, bhash) {
+			if let Err(e) = peer.send_txhashset_request(txhashset_header.height, bhash) {
 				error!("state_sync: send_txhashset_request err! {:?}", e);
 				return Err(e);
 			}
-			return Ok(peer.clone());
+			Ok(peer.clone())
+		} else {
+			Err(p2p::Error::PeerException)
 		}
-		Err(p2p::Error::PeerException)
 	}
 
 	// For now this is a one-time thing (it can be slow) at initial startup.
