@@ -14,6 +14,7 @@
 
 use self::chain::txhashset::BitmapAccumulator;
 use self::core::core::hash::Hash;
+use self::core::core::pmmr::{VecBackend, PMMR};
 use self::core::ser::PMMRIndexHashable;
 use bit_vec::BitVec;
 use grin_chain as chain;
@@ -24,7 +25,9 @@ use grin_util as util;
 fn test_bitmap_accumulator() {
 	util::init_test_logger();
 
-	let mut accumulator = BitmapAccumulator::new();
+	let mut backend = VecBackend::new();
+	let pmmr = PMMR::at(&mut backend, 0);
+	let mut accumulator = BitmapAccumulator::new(pmmr);
 	assert_eq!(accumulator.root(), Hash::default());
 
 	// 1000... (rebuild from 0, setting [0] true)

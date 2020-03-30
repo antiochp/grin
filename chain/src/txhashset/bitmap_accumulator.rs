@@ -22,6 +22,7 @@ use crate::core::core::hash::{DefaultHashable, Hash};
 use crate::core::core::pmmr::{self, ReadonlyPMMR, VecBackend, PMMR};
 use crate::core::ser::{self, PMMRable, Readable, Reader, Writeable, Writer};
 use crate::error::{Error, ErrorKind};
+use grin_store::pmmr::PMMRBackend;
 
 /// The "bitmap accumulator" allows us to commit to a specific bitmap by splitting it into
 /// fragments and inserting these fragments into an MMR to produce an overall root hash.
@@ -41,17 +42,14 @@ use crate::error::{Error, ErrorKind};
 /// both inclusion and location in the overall "accumulator" MMR. We plan to take advantage of
 /// this during fast sync, allowing for validation of partial data.
 ///
-#[derive(Clone)]
-pub struct BitmapAccumulator {
-	backend: VecBackend<BitmapChunk>,
+pub struct BitmapAccumulator<'a> {
+	pmmr: PMMR<'a, BitmapChunk, PMMRBackend<BitmapChunk>>,
 }
 
-impl BitmapAccumulator {
+impl<'a> BitmapAccumulator<'a> {
 	/// Crate a new empty bitmap accumulator.
-	pub fn new() -> BitmapAccumulator {
-		BitmapAccumulator {
-			backend: VecBackend::new_hash_only(),
-		}
+	pub fn new(pmmr: PMMR<'a, BitmapChunk, PMMRBackend<BitmapChunk>>) -> BitmapAccumulator<'a> {
+		BitmapAccumulator { pmmr }
 	}
 
 	/// Initialize a bitmap accumulator given the provided idx iterator.
@@ -144,11 +142,10 @@ impl BitmapAccumulator {
 	/// previous chunk ready for the updated chunk to be appended.
 	fn rewind_prior(&mut self, from_idx: u64) -> Result<(), Error> {
 		let chunk_idx = BitmapAccumulator::chunk_idx(from_idx);
-		let last_pos = self.backend.size();
-		let mut pmmr = PMMR::at(&mut self.backend, last_pos);
 		let chunk_pos = pmmr::insertion_to_pmmr_index(chunk_idx + 1);
 		let rewind_pos = chunk_pos.saturating_sub(1);
-		pmmr.rewind(rewind_pos, &Bitmap::create())
+		self.pmmr
+			.rewind(rewind_pos, &Bitmap::create())
 			.map_err(ErrorKind::Other)?;
 		Ok(())
 	}
@@ -158,7 +155,7 @@ impl BitmapAccumulator {
 	/// as necessary to put the new chunk at the correct place.
 	fn pad_left(&mut self, from_idx: u64) -> Result<(), Error> {
 		let chunk_idx = BitmapAccumulator::chunk_idx(from_idx);
-		let current_chunk_idx = pmmr::n_leaves(self.backend.size());
+		let current_chunk_idx = pmmr::n_leaves(self.pmmr.unpruned_size());
 		for _ in current_chunk_idx..chunk_idx {
 			self.append_chunk(BitmapChunk::new())?;
 		}
@@ -168,15 +165,18 @@ impl BitmapAccumulator {
 	/// Append a new chunk to the BitmapAccumulator.
 	/// Append parent hashes (if any) as necessary to build associated peak.
 	pub fn append_chunk(&mut self, chunk: BitmapChunk) -> Result<u64, Error> {
-		let last_pos = self.backend.size();
-		PMMR::at(&mut self.backend, last_pos)
+		self.pmmr
 			.push(&chunk)
 			.map_err(|e| ErrorKind::Other(e).into())
 	}
 
 	/// The root hash of the bitmap accumulator MMR.
-	pub fn root(&self) -> Hash {
-		ReadonlyPMMR::at(&self.backend, self.backend.size()).root()
+	pub fn root(&self) -> Result<Hash, Error> {
+		self.pmmr.root().map_err(|e| ErrorKind::Other(e).into())
+	}
+
+	pub fn pmmr_size(&self) -> u64 {
+		self.pmmr.unpruned_size()
 	}
 }
 

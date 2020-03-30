@@ -602,7 +602,7 @@ impl Chain {
 		// depends on the output_mmr_size
 		{
 			// Carefully destructure these correctly...
-			let (output_mmr_size, _, kernel_mmr_size) = sizes;
+			let (output_mmr_size, _, kernel_mmr_size, _) = sizes;
 			b.header.output_mmr_size = output_mmr_size;
 			b.header.kernel_mmr_size = kernel_mmr_size;
 		}

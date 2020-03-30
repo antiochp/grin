@@ -23,7 +23,7 @@ use crate::core::core::{Block, BlockHeader, Input, Output, OutputIdentifier, TxK
 use crate::core::ser::{PMMRable, ProtocolVersion};
 use crate::error::{Error, ErrorKind};
 use crate::store::{Batch, ChainStore};
-use crate::txhashset::bitmap_accumulator::BitmapAccumulator;
+use crate::txhashset::bitmap_accumulator::{BitmapAccumulator, BitmapChunk};
 use crate::txhashset::{RewindableKernelView, UTXOView};
 use crate::types::{CommitPos, OutputRoots, Tip, TxHashSetRoots, TxHashsetWriteStatus};
 use crate::util::secp::pedersen::{Commitment, RangeProof};
@@ -41,6 +41,8 @@ const TXHASHSET_SUBDIR: &str = "txhashset";
 const OUTPUT_SUBDIR: &str = "output";
 const RANGE_PROOF_SUBDIR: &str = "rangeproof";
 const KERNEL_SUBDIR: &str = "kernel";
+
+const UTXO_SUBDIR: &str = "utxo";
 
 const TXHASHSET_ZIP: &str = "txhashset_snapshot";
 
@@ -110,7 +112,8 @@ pub struct TxHashSet {
 	rproof_pmmr_h: PMMRHandle<RangeProof>,
 	kernel_pmmr_h: PMMRHandle<TxKernel>,
 
-	bitmap_accumulator: BitmapAccumulator,
+	// Handle for the utxo bitmap "accumulator" backend.
+	utxo_pmmr_h: PMMRHandle<BitmapChunk>,
 
 	// chain store used as index of commitments to MMR positions
 	commit_index: Arc<ChainStore>,
@@ -140,9 +143,6 @@ impl TxHashSet {
 			ProtocolVersion(1),
 			header,
 		)?;
-
-		// Initialize the bitmap accumulator from the current output PMMR.
-		let bitmap_accumulator = TxHashSet::bitmap_accumulator(&output_pmmr_h)?;
 
 		let mut maybe_kernel_handle: Option<PMMRHandle<TxKernel>> = None;
 		let versions = vec![ProtocolVersion(2), ProtocolVersion(1)];
@@ -185,26 +185,45 @@ impl TxHashSet {
 				);
 			}
 		}
+
+		let mut utxo_pmmr_h = PMMRHandle::new(
+			Path::new(&root_dir)
+				.join(TXHASHSET_SUBDIR)
+				.join(UTXO_SUBDIR),
+			false,
+			ProtocolVersion(1),
+			None,
+		)?;
+
+		// Rebuild the utxo bitmap accumulator here based on the output PMMR.
+		{
+			let output_pmmr = ReadonlyPMMR::at(&output_pmmr_h.backend, output_pmmr_h.last_pos);
+			let size = pmmr::n_leaves(output_pmmr_h.last_pos);
+
+			let utxo_pmmr = PMMR::at(&mut utxo_pmmr_h.backend, utxo_pmmr_h.last_pos);
+
+			let size = {
+				let mut bitmap_accumulator = BitmapAccumulator::new(utxo_pmmr);
+				bitmap_accumulator.init(&mut output_pmmr.leaf_idx_iter(0), size)?;
+				bitmap_accumulator.pmmr_size()
+			};
+
+			utxo_pmmr_h.backend.sync()?;
+			utxo_pmmr_h.last_pos = size;
+			panic!("stahp!!!");
+		}
+
 		if let Some(kernel_pmmr_h) = maybe_kernel_handle {
 			Ok(TxHashSet {
 				output_pmmr_h,
 				rproof_pmmr_h,
 				kernel_pmmr_h,
-				bitmap_accumulator,
+				utxo_pmmr_h,
 				commit_index,
 			})
 		} else {
 			Err(ErrorKind::TxHashSetErr("failed to open kernel PMMR".to_string()).into())
 		}
-	}
-
-	// Build a new bitmap accumulator for the provided output PMMR.
-	fn bitmap_accumulator(pmmr_h: &PMMRHandle<Output>) -> Result<BitmapAccumulator, Error> {
-		let pmmr = ReadonlyPMMR::at(&pmmr_h.backend, pmmr_h.last_pos);
-		let size = pmmr::n_leaves(pmmr_h.last_pos);
-		let mut bitmap_accumulator = BitmapAccumulator::new();
-		bitmap_accumulator.init(&mut pmmr.leaf_idx_iter(0), size)?;
-		Ok(bitmap_accumulator)
 	}
 
 	/// Close all backend file handles
@@ -325,10 +344,12 @@ impl TxHashSet {
 		let kernel_pmmr =
 			ReadonlyPMMR::at(&self.kernel_pmmr_h.backend, self.kernel_pmmr_h.last_pos);
 
+		let utxo_pmmr = ReadonlyPMMR::at(&self.utxo_pmmr_h.backend, self.utxo_pmmr_h.last_pos);
+
 		TxHashSetRoots {
 			output_roots: OutputRoots {
 				pmmr_root: output_pmmr.root(),
-				bitmap_root: self.bitmap_accumulator.root(),
+				bitmap_root: utxo_pmmr.root(),
 			},
 			rproof_root: rproof_pmmr.root(),
 			kernel_root: kernel_pmmr.root(),
@@ -580,7 +601,7 @@ pub fn extending<'a, F, T>(
 where
 	F: FnOnce(&mut ExtensionPair<'_>, &Batch<'_>) -> Result<T, Error>,
 {
-	let sizes: (u64, u64, u64);
+	let sizes: (u64, u64, u64, u64);
 	let res: Result<T, Error>;
 	let rollback: bool;
 	let bitmap_accumulator: BitmapAccumulator;
@@ -598,8 +619,6 @@ where
 	// index saving can be undone
 	let child_batch = batch.child()?;
 	{
-		trace!("Starting new txhashset extension.");
-
 		let header_pmmr = PMMR::at(&mut header_pmmr.backend, header_pmmr.last_pos);
 		let mut header_extension = HeaderExtension::new(header_pmmr, header_head);
 		let mut extension = Extension::new(trees, head);
@@ -611,7 +630,6 @@ where
 
 		rollback = extension_pair.extension.rollback;
 		sizes = extension_pair.extension.sizes();
-		bitmap_accumulator = extension_pair.extension.bitmap_accumulator.clone();
 	}
 
 	// During an extension we do not want to modify the header_extension (and only read from it).
@@ -624,6 +642,7 @@ where
 			trees.output_pmmr_h.backend.discard();
 			trees.rproof_pmmr_h.backend.discard();
 			trees.kernel_pmmr_h.backend.discard();
+			trees.utxo_pmmr_h.backend.discard();
 			Err(e)
 		}
 		Ok(r) => {
@@ -632,21 +651,19 @@ where
 				trees.output_pmmr_h.backend.discard();
 				trees.rproof_pmmr_h.backend.discard();
 				trees.kernel_pmmr_h.backend.discard();
+				trees.utxo_pmmr_h.backend.discard();
 			} else {
 				trace!("Committing txhashset extension. sizes {:?}", sizes);
 				child_batch.commit()?;
 				trees.output_pmmr_h.backend.sync()?;
 				trees.rproof_pmmr_h.backend.sync()?;
 				trees.kernel_pmmr_h.backend.sync()?;
+				trees.utxo_pmmr_h.backend.sync()?;
 				trees.output_pmmr_h.last_pos = sizes.0;
 				trees.rproof_pmmr_h.last_pos = sizes.1;
 				trees.kernel_pmmr_h.last_pos = sizes.2;
-
-				// Update our bitmap_accumulator based on our extension
-				trees.bitmap_accumulator = bitmap_accumulator;
+				trees.utxo_pmmr_h.last_pos = sizes.3;
 			}
-
-			trace!("TxHashSet extension done.");
 			Ok(r)
 		}
 	}
@@ -854,7 +871,7 @@ pub struct Extension<'a> {
 	rproof_pmmr: PMMR<'a, RangeProof, PMMRBackend<RangeProof>>,
 	kernel_pmmr: PMMR<'a, TxKernel, PMMRBackend<TxKernel>>,
 
-	bitmap_accumulator: BitmapAccumulator,
+	bitmap_accumulator: BitmapAccumulator<'a>,
 
 	/// Rollback flag.
 	rollback: bool,
@@ -890,21 +907,26 @@ impl<'a> Committed for Extension<'a> {
 
 impl<'a> Extension<'a> {
 	fn new(trees: &'a mut TxHashSet, head: Tip) -> Extension<'a> {
+		let output_pmmr = PMMR::at(
+			&mut trees.output_pmmr_h.backend,
+			trees.output_pmmr_h.last_pos,
+		);
+		let rproof_pmmr = PMMR::at(
+			&mut trees.rproof_pmmr_h.backend,
+			trees.rproof_pmmr_h.last_pos,
+		);
+		let kernel_pmmr = PMMR::at(
+			&mut trees.kernel_pmmr_h.backend,
+			trees.kernel_pmmr_h.last_pos,
+		);
+		let utxo_pmmr = PMMR::at(&mut trees.utxo_pmmr_h.backend, trees.utxo_pmmr_h.last_pos);
+
 		Extension {
 			head,
-			output_pmmr: PMMR::at(
-				&mut trees.output_pmmr_h.backend,
-				trees.output_pmmr_h.last_pos,
-			),
-			rproof_pmmr: PMMR::at(
-				&mut trees.rproof_pmmr_h.backend,
-				trees.rproof_pmmr_h.last_pos,
-			),
-			kernel_pmmr: PMMR::at(
-				&mut trees.kernel_pmmr_h.backend,
-				trees.kernel_pmmr_h.last_pos,
-			),
-			bitmap_accumulator: trees.bitmap_accumulator.clone(),
+			output_pmmr,
+			rproof_pmmr,
+			kernel_pmmr,
+			bitmap_accumulator: BitmapAccumulator::new(utxo_pmmr),
 			rollback: false,
 		}
 	}
@@ -1230,7 +1252,10 @@ impl<'a> Extension<'a> {
 					.output_pmmr
 					.root()
 					.map_err(|_| ErrorKind::InvalidRoot)?,
-				bitmap_root: self.bitmap_accumulator.root(),
+				bitmap_root: self
+					.bitmap_accumulator
+					.root()
+					.map_err(|_| ErrorKind::InvalidRoot)?,
 			},
 			rproof_root: self
 				.rproof_pmmr
@@ -1256,12 +1281,8 @@ impl<'a> Extension<'a> {
 		if header.height == 0 {
 			return Ok(());
 		}
-		if (
-			header.output_mmr_size,
-			header.output_mmr_size,
-			header.kernel_mmr_size,
-		) != self.sizes()
-		{
+		let (output_mmr_size, _, kernel_mmr_size, _) = self.sizes();
+		if output_mmr_size != header.output_mmr_size || kernel_mmr_size != header.kernel_mmr_size {
 			Err(ErrorKind::InvalidMMRSize.into())
 		} else {
 			Ok(())
@@ -1380,11 +1401,12 @@ impl<'a> Extension<'a> {
 	}
 
 	/// Sizes of each of the MMRs
-	pub fn sizes(&self) -> (u64, u64, u64) {
+	pub fn sizes(&self) -> (u64, u64, u64, u64) {
 		(
 			self.output_pmmr.unpruned_size(),
 			self.rproof_pmmr.unpruned_size(),
 			self.kernel_pmmr.unpruned_size(),
+			self.bitmap_accumulator.pmmr_size(),
 		)
 	}
 
