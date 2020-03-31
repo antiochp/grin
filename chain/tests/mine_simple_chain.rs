@@ -746,12 +746,13 @@ fn spend_in_fork_and_compact() {
 /// Test ability to retrieve block headers for a given output
 #[test]
 fn output_header_mappings() {
+	let chain_dir = ".grin_header_for_output";
+	clean_output_dir(chain_dir);
+	util::init_test_logger();
+
 	global::set_mining_mode(ChainTypes::AutomatedTesting);
 	{
-		let chain = init_chain(
-			".grin_header_for_output",
-			pow::mine_genesis_block().unwrap(),
-		);
+		let chain = init_chain(chain_dir, pow::mine_genesis_block().unwrap());
 		let keychain = ExtKeychain::from_random_seed(false).unwrap();
 		let mut reward_outputs = vec![];
 
@@ -810,7 +811,7 @@ fn output_header_mappings() {
 		}
 	}
 	// Cleanup chain directory
-	clean_output_dir(".grin_header_for_output");
+	clean_output_dir(chain_dir);
 }
 
 // Use diff as both diff *and* key_idx for convenience (deterministic private key for test blocks)

@@ -334,6 +334,10 @@ where
 			self.buffer_start_pos_bak = self.buffer_start_pos;
 		}
 		self.buffer_start_pos = pos;
+
+		// We do not currently support rewinding *within* the buffer.
+		// Buffer must be cleared here regardless of contents.
+		self.buffer.clear();
 	}
 
 	/// Syncs all writes (fsync), reallocating the memory map to make the newly

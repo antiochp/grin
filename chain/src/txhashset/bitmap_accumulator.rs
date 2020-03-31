@@ -194,6 +194,10 @@ impl BitmapChunk {
 		BitmapChunk(BitVec::from_elem(Self::LEN_BITS, false))
 	}
 
+	pub fn from_bytes(bytes: &[u8]) -> BitmapChunk {
+		BitmapChunk(BitVec::from_bytes(bytes))
+	}
+
 	/// Set a single bit in this chunk.
 	/// 0-indexed from start of chunk.
 	/// Panics if idx is outside the valid range of bits in a chunk.
@@ -233,7 +237,8 @@ impl Readable for BitmapChunk {
 	/// Reading is not currently supported, just return an empty one for now.
 	/// We store the underlying roaring bitmap externally for the bitmap accumulator
 	/// and the "hash only" backend means we never actually read these chunks.
-	fn read(_reader: &mut dyn Reader) -> Result<BitmapChunk, ser::Error> {
-		Ok(BitmapChunk::new())
+	fn read(reader: &mut dyn Reader) -> Result<BitmapChunk, ser::Error> {
+		let bytes = reader.read_fixed_bytes(128)?;
+		Ok(BitmapChunk::from_bytes(&bytes))
 	}
 }

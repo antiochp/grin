@@ -200,7 +200,8 @@ impl TxHashSet {
 			let output_pmmr = ReadonlyPMMR::at(&output_pmmr_h.backend, output_pmmr_h.last_pos);
 			let size = pmmr::n_leaves(output_pmmr_h.last_pos);
 
-			let utxo_pmmr = PMMR::at(&mut utxo_pmmr_h.backend, utxo_pmmr_h.last_pos);
+			// Open the utxo bitmnap accumulator PMMR at 0. Ignore anything already in there.
+			let utxo_pmmr = PMMR::at(&mut utxo_pmmr_h.backend, 0);
 
 			let size = {
 				let mut bitmap_accumulator = BitmapAccumulator::new(utxo_pmmr);
@@ -210,7 +211,6 @@ impl TxHashSet {
 
 			utxo_pmmr_h.backend.sync()?;
 			utxo_pmmr_h.last_pos = size;
-			panic!("stahp!!!");
 		}
 
 		if let Some(kernel_pmmr_h) = maybe_kernel_handle {
@@ -521,15 +521,12 @@ where
 		inner(&mut extension_pair, &batch)
 	};
 
-	trace!("Rollbacking txhashset (readonly) extension.");
-
 	handle.backend.discard();
 
 	trees.output_pmmr_h.backend.discard();
 	trees.rproof_pmmr_h.backend.discard();
 	trees.kernel_pmmr_h.backend.discard();
-
-	trace!("TxHashSet (readonly) extension done.");
+	trees.utxo_pmmr_h.backend.discard();
 
 	res
 }
