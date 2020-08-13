@@ -58,10 +58,6 @@ fn check_known(header: &BlockHeader, head: &Tip, ctx: &BlockContext<'_>) -> Resu
 // Validate only the proof of work in a block header.
 // Used to cheaply validate pow before checking if orphan or continuing block validation.
 fn validate_pow_only(header: &BlockHeader, ctx: &mut BlockContext<'_>) -> Result<(), Error> {
-	if ctx.opts.contains(Options::SKIP_POW) {
-		// Some of our tests require this check to be skipped (we should revisit this).
-		return Ok(());
-	}
 	if !header.pow.is_primary() && !header.pow.is_secondary() {
 		return Err(ErrorKind::LowEdgebits.into());
 	}
@@ -342,43 +338,41 @@ fn validate_header(header: &BlockHeader, ctx: &mut BlockContext<'_>) -> Result<(
 	// so now we can check the total_difficulty increase is also valid
 	// check the pow hash shows a difficulty at least as large
 	// as the target difficulty
-	if !ctx.opts.contains(Options::SKIP_POW) {
-		// Quick check of this header in isolation. No point proceeding if this fails.
-		// We can do this without needing to iterate over previous headers.
-		validate_pow_only(header, ctx)?;
+	// Quick check of this header in isolation. No point proceeding if this fails.
+	// We can do this without needing to iterate over previous headers.
+	validate_pow_only(header, ctx)?;
 
-		if header.total_difficulty() <= prev.total_difficulty() {
-			return Err(ErrorKind::DifficultyTooLow.into());
-		}
+	if header.total_difficulty() <= prev.total_difficulty() {
+		return Err(ErrorKind::DifficultyTooLow.into());
+	}
 
-		let target_difficulty = header.total_difficulty() - prev.total_difficulty();
+	let target_difficulty = header.total_difficulty() - prev.total_difficulty();
 
-		if header.pow.to_difficulty(header.height) < target_difficulty {
-			return Err(ErrorKind::DifficultyTooLow.into());
-		}
+	if header.pow.to_difficulty(header.height) < target_difficulty {
+		return Err(ErrorKind::DifficultyTooLow.into());
+	}
 
-		// explicit check to ensure total_difficulty has increased by exactly
-		// the _network_ difficulty of the previous block
-		// (during testnet1 we use _block_ difficulty here)
-		let child_batch = ctx.batch.child()?;
-		let diff_iter = store::DifficultyIter::from_batch(prev.hash(), child_batch);
-		let next_header_info = consensus::next_difficulty(header.height, diff_iter);
-		if target_difficulty != next_header_info.difficulty {
-			info!(
-				"validate_header: header target difficulty {} != {}",
-				target_difficulty.to_num(),
-				next_header_info.difficulty.to_num()
-			);
-			return Err(ErrorKind::WrongTotalDifficulty.into());
-		}
-		// check the secondary PoW scaling factor if applicable
-		if header.pow.secondary_scaling != next_header_info.secondary_scaling {
-			info!(
-				"validate_header: header secondary scaling {} != {}",
-				header.pow.secondary_scaling, next_header_info.secondary_scaling
-			);
-			return Err(ErrorKind::InvalidScaling.into());
-		}
+	// explicit check to ensure total_difficulty has increased by exactly
+	// the _network_ difficulty of the previous block
+	// (during testnet1 we use _block_ difficulty here)
+	let child_batch = ctx.batch.child()?;
+	let diff_iter = store::DifficultyIter::from_batch(prev.hash(), child_batch);
+	let next_header_info = consensus::next_difficulty(header.height, diff_iter);
+	if target_difficulty != next_header_info.difficulty {
+		info!(
+			"validate_header: header target difficulty {} != {}",
+			target_difficulty.to_num(),
+			next_header_info.difficulty.to_num()
+		);
+		return Err(ErrorKind::WrongTotalDifficulty.into());
+	}
+	// check the secondary PoW scaling factor if applicable
+	if header.pow.secondary_scaling != next_header_info.secondary_scaling {
+		info!(
+			"validate_header: header secondary scaling {} != {}",
+			header.pow.secondary_scaling, next_header_info.secondary_scaling
+		);
+		return Err(ErrorKind::InvalidScaling.into());
 	}
 
 	Ok(())

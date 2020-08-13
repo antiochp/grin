@@ -91,14 +91,14 @@ fn mine_short_chain() {
 // Convenience wrapper for processing a full block on the test chain.
 fn process_header(chain: &Chain, header: &BlockHeader) {
 	chain
-		.process_block_header(header, chain::Options::SKIP_POW)
+		.process_block_header(header, chain::Options::MINE)
 		.unwrap();
 }
 
 // Convenience wrapper for processing a block header on the test chain.
 fn process_block(chain: &Chain, block: &Block) {
 	chain
-		.process_block(block.clone(), chain::Options::SKIP_POW)
+		.process_block(block.clone(), chain::Options::MINE)
 		.unwrap();
 }
 
@@ -325,23 +325,20 @@ fn test_block_a_header_b_header_b_fork_block_b_fork_block_b_block_c_fork() {
 }
 
 #[test]
-// This test creates a reorg at REORG_DEPTH by mining a block with difficulty that
+// This test creates a reorg at REORG_DEPTH by mining a fork that
 // exceeds original chain total difficulty.
 //
-// Illustration of reorg with NUM_BLOCKS_MAIN = 6 and REORG_DEPTH = 5:
-//
-// difficulty:    1        2        3        4        5        6
+// Illustration of reorg with NUM_BLOCKS_MAIN = 6, NUM_BLOCKS_FORK = 7 and REORG_DEPTH = 5:
 //
 //                       / [ 2  ] - [ 3  ] - [ 4  ] - [ 5  ] - [ 6  ] <- original chain
 // [ Genesis ] -[ 1 ]- *
-//                     ^ \ [ 2' ] - ................................  <- reorg chain with depth 5
-//                     |
-// difficulty:    1    |   24
+//                     ^ \ [ 2' ] - [ 3' ] - [ 4' ] - [ 5' ] - [ 6' ] - [ 7' ] <- reorg chain with depth 5
 //                     |
 //                     \----< Fork point and chain reorg
 fn mine_reorg() {
 	// Test configuration
 	const NUM_BLOCKS_MAIN: u64 = 6; // Number of blocks to mine in main chain
+	const NUM_BLOCKS_FORK: u64 = 7; // Total number of blocks on the forked chain
 	const REORG_DEPTH: u64 = 5; // Number of blocks to be discarded from main chain after reorg
 
 	const DIR_NAME: &str = ".grin_reorg";
@@ -360,28 +357,30 @@ fn mine_reorg() {
 		// Add blocks to main chain with gradually increasing difficulty
 		let mut prev = chain.head_header().unwrap();
 		for n in 1..=NUM_BLOCKS_MAIN {
-			let b = prepare_block(&kc, &prev, &chain, n);
+			let b = prepare_block(&kc, &prev, &chain, n as u32);
 			prev = b.header.clone();
-			chain.process_block(b, chain::Options::SKIP_POW).unwrap();
+			chain.process_block(b, chain::Options::NONE).unwrap();
 		}
 
 		let head = chain.head().unwrap();
 		assert_eq!(head.height, NUM_BLOCKS_MAIN);
 		assert_eq!(head.hash(), prev.hash());
 
-		// Reorg chain should exceed main chain's total difficulty to be considered
-		let reorg_difficulty = head.total_difficulty.to_num();
-
 		// Create one block for reorg chain forking off NUM_BLOCKS_MAIN - REORG_DEPTH height
-		let fork_head = chain
-			.get_header_by_height(NUM_BLOCKS_MAIN - REORG_DEPTH)
-			.unwrap();
-		let b = prepare_block(&kc, &fork_head, &chain, reorg_difficulty);
-		let reorg_head = b.header.clone();
-		chain.process_block(b, chain::Options::SKIP_POW).unwrap();
+		let fork_height = NUM_BLOCKS_MAIN - REORG_DEPTH;
+		let fork_point = chain.get_header_by_height(fork_height).unwrap();
+
+		let mut prev = fork_point.clone();
+		for n in (fork_height + 1)..=NUM_BLOCKS_FORK {
+			let b = prepare_block(&kc, &prev, &chain, n as u32);
+			prev = b.header.clone();
+			chain.process_block(b, chain::Options::NONE).unwrap();
+		}
+
+		let reorg_head = Tip::from_header(&prev);
 
 		// Check that reorg is correctly reported in block status
-		let fork_point = chain.get_header_by_height(1).unwrap();
+		// let fork_point = chain.get_header_by_height(1).unwrap();
 		assert_eq!(
 			*adapter.last_status.read(),
 			Some(BlockStatus::Reorg {
@@ -392,60 +391,12 @@ fn mine_reorg() {
 
 		// Chain should be switched to the reorganized chain
 		let head = chain.head().unwrap();
-		assert_eq!(head.height, NUM_BLOCKS_MAIN - REORG_DEPTH + 1);
-		assert_eq!(head.hash(), reorg_head.hash());
+		assert_eq!(head.height, NUM_BLOCKS_FORK);
+		assert_eq!(head, reorg_head);
 	}
 
 	// Cleanup chain directory
 	clean_output_dir(DIR_NAME);
-}
-
-#[test]
-fn mine_forks() {
-	clean_output_dir(".grin2");
-	global::set_local_chain_type(ChainTypes::AutomatedTesting);
-	{
-		let chain = init_chain(".grin2", pow::mine_genesis_block().unwrap());
-		let kc = ExtKeychain::from_random_seed(false).unwrap();
-
-		// add a first block to not fork genesis
-		let prev = chain.head_header().unwrap();
-		let b = prepare_block(&kc, &prev, &chain, 2);
-		chain.process_block(b, chain::Options::SKIP_POW).unwrap();
-
-		// mine and add a few blocks
-
-		for n in 1..4 {
-			// first block for one branch
-			let prev = chain.head_header().unwrap();
-			let b1 = prepare_block(&kc, &prev, &chain, 3 * n);
-
-			// process the first block to extend the chain
-			let bhash = b1.hash();
-			chain.process_block(b1, chain::Options::SKIP_POW).unwrap();
-
-			// checking our new head
-			let head = chain.head().unwrap();
-			assert_eq!(head.height, (n + 1) as u64);
-			assert_eq!(head.last_block_h, bhash);
-			assert_eq!(head.prev_block_h, prev.hash());
-
-			// 2nd block with higher difficulty for other branch
-			let b2 = prepare_block(&kc, &prev, &chain, 3 * n + 1);
-
-			// process the 2nd block to build a fork with more work
-			let bhash = b2.hash();
-			chain.process_block(b2, chain::Options::SKIP_POW).unwrap();
-
-			// checking head switch
-			let head = chain.head().unwrap();
-			assert_eq!(head.height, (n + 1) as u64);
-			assert_eq!(head.last_block_h, bhash);
-			assert_eq!(head.prev_block_h, prev.hash());
-		}
-	}
-	// Cleanup chain directory
-	clean_output_dir(".grin2");
 }
 
 #[test]
@@ -460,7 +411,7 @@ fn mine_losing_fork() {
 		let prev = chain.head_header().unwrap();
 		let b1 = prepare_block(&kc, &prev, &chain, 2);
 		let b1head = b1.header.clone();
-		chain.process_block(b1, chain::Options::SKIP_POW).unwrap();
+		chain.process_block(b1, chain::Options::MINE).unwrap();
 
 		// prepare the 2 successor, sibling blocks, one with lower diff
 		let b2 = prepare_block(&kc, &b1head, &chain, 4);
@@ -469,16 +420,14 @@ fn mine_losing_fork() {
 
 		// add higher difficulty first, prepare its successor, then fork
 		// with lower diff
-		chain.process_block(b2, chain::Options::SKIP_POW).unwrap();
+		chain.process_block(b2, chain::Options::MINE).unwrap();
 		assert_eq!(chain.head_header().unwrap().hash(), b2head.hash());
 		let b3 = prepare_block(&kc, &b2head, &chain, 5);
-		chain
-			.process_block(bfork, chain::Options::SKIP_POW)
-			.unwrap();
+		chain.process_block(bfork, chain::Options::MINE).unwrap();
 
 		// adding the successor
 		let b3head = b3.header.clone();
-		chain.process_block(b3, chain::Options::SKIP_POW).unwrap();
+		chain.process_block(b3, chain::Options::MINE).unwrap();
 		assert_eq!(chain.head_header().unwrap().hash(), b3head.hash());
 	}
 	// Cleanup chain directory
@@ -503,7 +452,7 @@ fn longer_fork() {
 		for n in 0..10 {
 			let b = prepare_block(&kc, &prev, &chain, 2 * n + 2);
 			prev = b.header.clone();
-			chain.process_block(b, chain::Options::SKIP_POW).unwrap();
+			chain.process_block(b, chain::Options::NONE).unwrap();
 		}
 
 		let forked_block = chain.get_header_by_height(5).unwrap();
@@ -516,7 +465,7 @@ fn longer_fork() {
 		for n in 0..7 {
 			let b = prepare_block(&kc, &prev, &chain, 2 * n + 11);
 			prev = b.header.clone();
-			chain.process_block(b, chain::Options::SKIP_POW).unwrap();
+			chain.process_block(b, chain::Options::NONE).unwrap();
 		}
 
 		let new_head = prev;
@@ -547,19 +496,19 @@ fn spend_rewind_spend() {
 
 		// mine the first block and keep track of the block_hash
 		// so we can spend the coinbase later
-		let b = prepare_block_key_idx(&kc, &head, &chain, 2, 1);
+		let b = prepare_block(&kc, &head, &chain, 1);
 		let out_id = OutputIdentifier::from(&b.outputs()[0]);
 		assert!(out_id.features.is_coinbase());
 		head = b.header.clone();
 		chain
-			.process_block(b.clone(), chain::Options::SKIP_POW)
+			.process_block(b.clone(), chain::Options::MINE)
 			.unwrap();
 
 		// now mine three further blocks
 		for n in 3..6 {
 			let b = prepare_block(&kc, &head, &chain, n);
 			head = b.header.clone();
-			chain.process_block(b, chain::Options::SKIP_POW).unwrap();
+			chain.process_block(b, chain::Options::MINE).unwrap();
 		}
 
 		// Make a note of this header as we will rewind back to here later.
@@ -582,14 +531,14 @@ fn spend_rewind_spend() {
 		let b = prepare_block_tx(&kc, &head, &chain, 6, &[tx1.clone()]);
 		head = b.header.clone();
 		chain
-			.process_block(b.clone(), chain::Options::SKIP_POW)
+			.process_block(b.clone(), chain::Options::MINE)
 			.unwrap();
 		chain.validate(false).unwrap();
 
 		// Now mine another block, reusing the private key for the coinbase we just spent.
 		{
-			let b = prepare_block_key_idx(&kc, &head, &chain, 7, 1);
-			chain.process_block(b, chain::Options::SKIP_POW).unwrap();
+			let b = prepare_block(&kc, &head, &chain, 1);
+			chain.process_block(b, chain::Options::MINE).unwrap();
 		}
 
 		// Now mine a competing block also spending the same coinbase output from earlier.
@@ -597,7 +546,7 @@ fn spend_rewind_spend() {
 		{
 			let b = prepare_block_tx(&kc, &rewind_to, &chain, 6, &[tx1]);
 			chain
-				.process_block(b.clone(), chain::Options::SKIP_POW)
+				.process_block(b.clone(), chain::Options::MINE)
 				.unwrap();
 			chain.validate(false).unwrap();
 		}
@@ -626,14 +575,14 @@ fn spend_in_fork_and_compact() {
 		assert!(out_id.features.is_coinbase());
 		fork_head = b.header.clone();
 		chain
-			.process_block(b.clone(), chain::Options::SKIP_POW)
+			.process_block(b.clone(), chain::Options::MINE)
 			.unwrap();
 
 		// now mine three further blocks
 		for n in 3..6 {
 			let b = prepare_block(&kc, &fork_head, &chain, n);
 			fork_head = b.header.clone();
-			chain.process_block(b, chain::Options::SKIP_POW).unwrap();
+			chain.process_block(b, chain::Options::MINE).unwrap();
 		}
 
 		// Check the height of the "fork block".
@@ -656,7 +605,7 @@ fn spend_in_fork_and_compact() {
 		let next = prepare_block_tx(&kc, &fork_head, &chain, 7, &[tx1.clone()]);
 		let prev_main = next.header.clone();
 		chain
-			.process_block(next.clone(), chain::Options::SKIP_POW)
+			.process_block(next.clone(), chain::Options::MINE)
 			.unwrap();
 		chain.validate(false).unwrap();
 
@@ -673,7 +622,7 @@ fn spend_in_fork_and_compact() {
 
 		let next = prepare_block_tx(&kc, &prev_main, &chain, 9, &[tx2.clone()]);
 		let prev_main = next.header.clone();
-		chain.process_block(next, chain::Options::SKIP_POW).unwrap();
+		chain.process_block(next, chain::Options::MINE).unwrap();
 
 		// Full chain validation for completeness.
 		chain.validate(false).unwrap();
@@ -681,12 +630,12 @@ fn spend_in_fork_and_compact() {
 		// mine 2 forked blocks from the first
 		let fork = prepare_block_tx(&kc, &fork_head, &chain, 6, &[tx1.clone()]);
 		let prev_fork = fork.header.clone();
-		chain.process_block(fork, chain::Options::SKIP_POW).unwrap();
+		chain.process_block(fork, chain::Options::MINE).unwrap();
 
 		let fork_next = prepare_block_tx(&kc, &prev_fork, &chain, 8, &[tx2.clone()]);
 		let prev_fork = fork_next.header.clone();
 		chain
-			.process_block(fork_next, chain::Options::SKIP_POW)
+			.process_block(fork_next, chain::Options::MINE)
 			.unwrap();
 
 		chain.validate(false).unwrap();
@@ -708,7 +657,7 @@ fn spend_in_fork_and_compact() {
 		let fork_next = prepare_block(&kc, &prev_fork, &chain, 10);
 		let prev_fork = fork_next.header.clone();
 		chain
-			.process_block(fork_next, chain::Options::SKIP_POW)
+			.process_block(fork_next, chain::Options::MINE)
 			.unwrap();
 		chain.validate(false).unwrap();
 
@@ -730,7 +679,7 @@ fn spend_in_fork_and_compact() {
 		for n in 0..20 {
 			let next = prepare_block(&kc, &prev, &chain, 11 + n);
 			prev = next.header.clone();
-			chain.process_block(next, chain::Options::SKIP_POW).unwrap();
+			chain.process_block(next, chain::Options::MINE).unwrap();
 		}
 
 		chain.validate(false).unwrap();
@@ -815,84 +764,46 @@ fn output_header_mappings() {
 	clean_output_dir(".grin_header_for_output");
 }
 
-// Use diff as both diff *and* key_idx for convenience (deterministic private key for test blocks)
-fn prepare_block<K>(kc: &K, prev: &BlockHeader, chain: &Chain, diff: u64) -> Block
-where
-	K: Keychain,
-{
-	let key_idx = diff as u32;
-	prepare_block_key_idx(kc, prev, chain, diff, key_idx)
+fn prepare_block<K: Keychain>(kc: &K, prev: &BlockHeader, chain: &Chain, key_idx: u32) -> Block {
+	prepare_block_tx(kc, prev, chain, key_idx, &[])
 }
 
-fn prepare_block_key_idx<K>(
+fn set_pow(header: &mut BlockHeader, chain: &Chain) {
+	let prev = chain.get_previous_header(header).unwrap();
+	let edge_bits = global::min_edge_bits();
+
+	let next_header_info =
+		consensus::next_difficulty(prev.height, chain.difficulty_iter().unwrap());
+
+	header.pow.secondary_scaling = next_header_info.secondary_scaling;
+	header.pow.proof.edge_bits = edge_bits;
+	header.pow.total_difficulty = prev.total_difficulty() + next_header_info.difficulty;
+	pow::pow_size(
+		header,
+		next_header_info.difficulty,
+		global::proofsize(),
+		edge_bits,
+	)
+	.unwrap();
+}
+
+fn prepare_block_tx<K: Keychain>(
 	kc: &K,
 	prev: &BlockHeader,
 	chain: &Chain,
-	diff: u64,
-	key_idx: u32,
-) -> Block
-where
-	K: Keychain,
-{
-	let mut b = prepare_block_nosum(kc, prev, diff, key_idx, &[]);
-	chain.set_txhashset_roots(&mut b).unwrap();
-	b
-}
-
-// Use diff as both diff *and* key_idx for convenience (deterministic private key for test blocks)
-fn prepare_block_tx<K>(
-	kc: &K,
-	prev: &BlockHeader,
-	chain: &Chain,
-	diff: u64,
-	txs: &[Transaction],
-) -> Block
-where
-	K: Keychain,
-{
-	let key_idx = diff as u32;
-	prepare_block_tx_key_idx(kc, prev, chain, diff, key_idx, txs)
-}
-
-fn prepare_block_tx_key_idx<K>(
-	kc: &K,
-	prev: &BlockHeader,
-	chain: &Chain,
-	diff: u64,
 	key_idx: u32,
 	txs: &[Transaction],
-) -> Block
-where
-	K: Keychain,
-{
-	let mut b = prepare_block_nosum(kc, prev, diff, key_idx, txs);
-	chain.set_txhashset_roots(&mut b).unwrap();
-	b
-}
-
-fn prepare_block_nosum<K>(
-	kc: &K,
-	prev: &BlockHeader,
-	diff: u64,
-	key_idx: u32,
-	txs: &[Transaction],
-) -> Block
-where
-	K: Keychain,
-{
-	let proof_size = global::proofsize();
+) -> Block {
 	let key_id = ExtKeychainPath::new(1, key_idx, 0, 0, 0).to_identifier();
-
 	let fees = txs.iter().map(|tx| tx.fee()).sum();
 	let reward =
 		libtx::reward::output(kc, &libtx::ProofBuilder::new(kc), &key_id, fees, false).unwrap();
-	let mut b = match core::core::Block::new(prev, txs, Difficulty::from_num(diff), reward) {
-		Err(e) => panic!("{:?}", e),
-		Ok(b) => b,
-	};
+	let mut b = core::core::Block::new(prev, txs, Difficulty::min(), reward).unwrap();
+
 	b.header.timestamp = prev.timestamp + Duration::seconds(60);
-	b.header.pow.total_difficulty = prev.total_difficulty() + Difficulty::from_num(diff);
-	b.header.pow.proof = pow::Proof::random(proof_size);
+
+	chain.set_txhashset_roots(&mut b).unwrap();
+	set_pow(&mut b.header, chain);
 	b
 }
 

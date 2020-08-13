@@ -28,8 +28,6 @@ bitflags! {
 	pub struct Options: u32 {
 		/// No flags
 		const NONE = 0b0000_0000;
-		/// Runs without checking the Proof of Work, mostly to make testing easier.
-		const SKIP_POW = 0b0000_0001;
 		/// Adds block while in syncing mode.
 		const SYNC = 0b0000_0010;
 		/// Block validation on a block we mined ourselves
