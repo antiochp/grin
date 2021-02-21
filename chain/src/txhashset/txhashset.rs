@@ -36,10 +36,13 @@ use crate::util::{file, secp_static, zip};
 use croaring::Bitmap;
 use grin_store;
 use grin_store::pmmr::{clean_files_by_prefix, PMMRBackend};
-use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
+use std::{
+	cmp::min,
+	fs::{self, File},
+};
 
 const TXHASHSET_SUBDIR: &str = "txhashset";
 
@@ -425,17 +428,20 @@ impl TxHashSet {
 	) -> Result<(), Error> {
 		debug!("txhashset: starting compaction...");
 
+		let head_header = batch.head_header()?;
+		let cutoff_pos = min(head_header.output_mmr_size, horizon_header.output_mmr_size);
+
 		let rewind_rm_pos = input_pos_to_rewind(&horizon_header, batch)?;
 
 		debug!("txhashset: check_compact output mmr backend...");
 		self.output_pmmr_h
 			.backend
-			.check_compact(horizon_header.output_mmr_size, &rewind_rm_pos)?;
+			.check_compact(cutoff_pos, &rewind_rm_pos)?;
 
 		debug!("txhashset: check_compact rangeproof mmr backend...");
 		self.rproof_pmmr_h
 			.backend
-			.check_compact(horizon_header.output_mmr_size, &rewind_rm_pos)?;
+			.check_compact(cutoff_pos, &rewind_rm_pos)?;
 
 		debug!("txhashset: ... compaction finished");
 
