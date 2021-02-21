@@ -416,7 +416,8 @@ impl TxHashSet {
 			.map_err(|_| ErrorKind::MerkleProof.into())
 	}
 
-	/// Compact the MMR data files and flush the rm logs
+	/// Compact the MMR data files and flush the rm logs.
+	/// Note: horizon_header here is based on header_head and during sync our head may be earlier than this.
 	pub fn compact(
 		&mut self,
 		horizon_header: &BlockHeader,
@@ -424,9 +425,7 @@ impl TxHashSet {
 	) -> Result<(), Error> {
 		debug!("txhashset: starting compaction...");
 
-		let head_header = batch.head_header()?;
-
-		let rewind_rm_pos = input_pos_to_rewind(&horizon_header, &head_header, batch)?;
+		let rewind_rm_pos = input_pos_to_rewind(&horizon_header, batch)?;
 
 		debug!("txhashset: check_compact output mmr backend...");
 		self.output_pmmr_h
@@ -1879,13 +1878,17 @@ pub fn clean_txhashset_folder(root_dir: &PathBuf) {
 /// of all inputs (spent outputs) we need to "undo" during a rewind.
 /// We do this by leveraging the "block_input_bitmap" cache and OR'ing
 /// the set of bitmaps together for the set of blocks being rewound.
-fn input_pos_to_rewind(
-	block_header: &BlockHeader,
-	head_header: &BlockHeader,
-	batch: &Batch<'_>,
-) -> Result<Bitmap, Error> {
+fn input_pos_to_rewind(block_header: &BlockHeader, batch: &Batch<'_>) -> Result<Bitmap, Error> {
+	let head = batch.head()?;
 	let mut bitmap = Bitmap::create();
-	let mut current = head_header.clone();
+
+	// If we are syncing then our head may be earlier than the horizon
+	// and we have no inputs to "undo".
+	if head.height < block_header.height {
+		return Ok(bitmap);
+	}
+
+	let mut current = batch.get_block_header(&head.hash())?;
 	while current.height > block_header.height {
 		if let Ok(block_bitmap) = batch.get_block_input_bitmap(&current.hash()) {
 			bitmap.or_inplace(&block_bitmap);

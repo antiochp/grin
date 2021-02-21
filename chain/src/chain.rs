@@ -1159,35 +1159,22 @@ impl Chain {
 	/// *Only* runs if we are not in archive mode.
 	fn remove_historical_blocks(
 		&self,
-		header_pmmr: &txhashset::PMMRHandle<BlockHeader>,
+		horizon_header: &BlockHeader,
 		batch: &store::Batch<'_>,
 	) -> Result<(), Error> {
+		// Just to be sure check archival mode here.
 		if self.archive_mode {
 			return Ok(());
 		}
 
-		let horizon = global::cut_through_horizon() as u64;
-		let head = batch.head()?;
-
-		let tail = match batch.tail() {
-			Ok(tail) => tail,
-			Err(_) => Tip::from_header(&self.genesis),
-		};
-
-		let cutoff = head.height.saturating_sub(horizon);
-
-		debug!(
-			"remove_historical_blocks: head height: {}, tail height: {}, horizon: {}, cutoff: {}",
-			head.height, tail.height, horizon, cutoff,
-		);
-
-		if cutoff == 0 {
+		// Chain is young, not enough history and nothing to remove.
+		if horizon_header.height == 0 {
 			return Ok(());
 		}
 
+		let tail = Tip::from_header(horizon_header);
+
 		let mut count = 0;
-		let tail_hash = header_pmmr.get_header_hash_by_height(head.height - horizon)?;
-		let tail = batch.get_block_header(&tail_hash)?;
 
 		// Remove old blocks (including short lived fork blocks) which height < tail.height
 		for block in batch.blocks_iter()? {
@@ -1197,11 +1184,13 @@ impl Chain {
 			}
 		}
 
-		batch.save_body_tail(&Tip::from_header(&tail))?;
+		batch.save_body_tail(&tail)?;
 
 		debug!(
-			"remove_historical_blocks: removed {} blocks. tail height: {}",
-			count, tail.height
+			"remove_historical_blocks: removed {} blocks. Updated tail: {} at {}",
+			count,
+			tail.hash(),
+			tail.height
 		);
 
 		Ok(())
@@ -1236,25 +1225,28 @@ impl Chain {
 		let batch = self.store.batch()?;
 
 		// Compact the txhashset itself (rewriting the pruned backend files).
-		{
-			let head_header = batch.head_header()?;
-			let current_height = head_header.height;
-			let horizon_height =
-				current_height.saturating_sub(global::cut_through_horizon().into());
-			let horizon_hash = header_pmmr.get_header_hash_by_height(horizon_height)?;
-			let horizon_header = batch.get_block_header(&horizon_hash)?;
+		// Note: The horizon is based off header_head here.
+		// This is ok during relay (node sync'd) as header_head and head will be consistent.
+		// This is beneficial during sync as we want to compact based on our future head (header_head)
+		// and not our current (syncing) head.
+		let header_head = batch.header_head()?;
+		let horizon_height = header_head
+			.height
+			.saturating_sub(global::cut_through_horizon().into());
+		let horizon_hash = header_pmmr.get_header_hash_by_height(horizon_height)?;
+		let horizon_header = batch.get_block_header(&horizon_hash)?;
 
-			txhashset.compact(&horizon_header, &batch)?;
-		}
+		txhashset.compact(&horizon_header, &batch)?;
 
 		// If we are not in archival mode remove historical blocks from the db.
 		if !self.archive_mode {
-			self.remove_historical_blocks(&header_pmmr, &batch)?;
+			self.remove_historical_blocks(&horizon_header, &batch)?;
 		}
 
 		// Make sure our output_pos index is consistent with the UTXO set.
 		txhashset.init_output_pos_index(&header_pmmr, &batch)?;
 
+		// TODO - This should be refactored to live outside compact()
 		// Rebuild our NRD kernel_pos index based on recent kernel history.
 		txhashset.init_recent_kernel_pos_index(&header_pmmr, &batch)?;
 
